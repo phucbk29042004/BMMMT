@@ -1,10 +1,29 @@
 <!doctype html>
 <html lang="vi">
-<head><meta charset="utf-8"><title>TrustSign</title></head>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10283f">
+  <title>TrustSign — Duyệt giao dịch an toàn</title>
+  <link rel="stylesheet" href="/css/app.css">
+  <script type="module" src="/js/app.js"></script>
+</head>
 <body>
-  <h1>TrustSign</h1>
-  <p>Server đang chạy. TV3 sẽ thay trang này bằng giao diện thật.</p>
-  <p>Thử API ngay tại <a href="/docs">/docs</a>.</p>
-  <p> hadhashdas</p>
+  <div class="app-frame">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="TrustSign trang chủ">
+        <span class="brand-mark" aria-hidden="true">T</span>
+        <span><strong>TrustSign</strong><small>Giao dịch có thể kiểm chứng</small></span>
+      </a>
+      <div id="session-area" class="session-area"></div>
+    </header>
+    <main id="app" class="main-content" aria-live="polite">
+      <p class="loading">Đang kết nối TrustSign…</p>
+    </main>
+    <footer class="footer">
+      <span>TrustSign · Xác thực hai bước · Chữ ký số ECDSA</span>
+      <a href="/docs" target="_blank" rel="noreferrer">Tài liệu API</a>
+    </footer>
+  </div>
 </body>
 </html>
