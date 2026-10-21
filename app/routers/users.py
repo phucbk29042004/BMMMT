@@ -42,7 +42,7 @@ def list_users(admin: Dict[str, Any] = Depends(require_roles("admin"))):
                 "id": r["id"],
                 "username": r["username"],
                 "role": r["role"],
-                "locked": bool(r["locked_until"]) and not is_past(r["locked_until"]),
+                "locked": r["role"] != "admin" and bool(r["locked_until"]) and not is_past(r["locked_until"]),
             }
             for r in rows
         ]

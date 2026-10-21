@@ -117,6 +117,32 @@ def test_tc17_lock_after_five_wrong_passwords(login_as, make_client):
     assert locked.status_code == 423 and err(locked) == "ACCOUNT_LOCKED"
 
 
+def test_admin_is_never_account_locked(make_client):
+    db.execute(
+        "UPDATE users SET failed_attempts = ?, locked_until = ? WHERE username = 'admin01'",
+        (settings.max_login_attempts - 1, "2099-01-01T00:00:00.000Z"),
+    )
+    c = make_client()
+    for _ in range(settings.max_login_attempts + 1):
+        r = c.post("/api/auth/login", json={"username": "admin01", "password": "sai-mat-khau"})
+        assert r.status_code == 401 and err(r) == "AUTH_INVALID_CREDENTIALS"
+
+    row = db.query_one("SELECT failed_attempts, locked_until FROM users WHERE username = 'admin01'")
+    assert row["failed_attempts"] == 0 and row["locked_until"] is None
+    assert c.post("/api/auth/login", json={"username": "admin01", "password": DEV_PASSWORD}).json() == {
+        "status": "MFA_REQUIRED"
+    }
+
+    wrong_code = "000000" if totp() != "000000" else "000001"
+    for _ in range(settings.max_login_attempts + 1):
+        r = c.post("/api/auth/mfa", json={"code": wrong_code})
+        assert r.status_code == 401 and err(r) == "MFA_INVALID"
+
+    row = db.query_one("SELECT failed_attempts, locked_until FROM users WHERE username = 'admin01'")
+    assert row["failed_attempts"] == 0 and row["locked_until"] is None
+    assert c.post("/api/auth/mfa", json={"code": totp()}).status_code == 200
+
+
 def test_tc17_rate_limit_on_real_route(make_client, monkeypatch):
     monkeypatch.setattr(settings, "rate_limit_max", 3)
     ratelimit.reset()

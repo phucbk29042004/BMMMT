@@ -45,11 +45,18 @@ def verify_password(password_hash: str, password: str) -> bool:
 
 
 def _is_locked(user: Dict[str, Any]) -> bool:
+    if user["role"] == "admin":
+        return False
     return bool(user["locked_until"]) and not is_past(user["locked_until"])
 
 
 def _register_failure(user: Dict[str, Any], event: str) -> None:
-    """Ghi nhận một lần thất bại; đủ số lần thì khóa tài khoản."""
+    """Ghi nhận thất bại; tài khoản admin không bị khóa theo số lần sai."""
+    if user["role"] == "admin":
+        db.execute("UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = ?", (user["id"],))
+        append_audit(event, user["id"], {"attempts": 0})
+        return
+
     attempts = user["failed_attempts"] + 1
     if attempts >= settings.max_login_attempts:
         until = in_minutes(settings.lock_minutes)

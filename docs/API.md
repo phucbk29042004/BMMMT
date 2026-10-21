@@ -250,7 +250,7 @@ Nếu tài khoản chưa cài TOTP:
 
 **Lỗi:** `AUTH_INVALID_CREDENTIALS` (401), `ACCOUNT_LOCKED` (423), `RATE_LIMITED` (429), `VALIDATION_ERROR` (400)
 
-Quy tắc: sai mật khẩu 5 lần thì khóa tài khoản 15 phút.
+Quy tắc: sai mật khẩu hoặc TOTP 5 lần thì khóa tài khoản 15 phút, ngoại trừ tài khoản `admin`. Tài khoản admin không bị khóa theo số lần đăng nhập sai; giới hạn tốc độ theo IP vẫn áp dụng.
 
 ### `POST /auth/mfa`
 
