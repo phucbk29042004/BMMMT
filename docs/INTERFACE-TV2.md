@@ -157,7 +157,7 @@ Sự kiện TV2 ghi: `TX_CREATED`, `TX_APPROVED`, `TX_FULLY_APPROVED`, `TX_REJEC
 | TC-09 | Chữ ký bằng khóa lạ | `SIGNATURE_INVALID` | `test_tc09_signature_by_unknown_key` |
 | TC-10 | Thiết bị chưa đăng ký / của người khác | `DEVICE_NOT_REGISTERED` | `test_tc10_device_not_registered_or_not_owned` |
 | TC-11 | Thiết bị đã thu hồi | `DEVICE_REVOKED` | `test_tc11_revoked_device`, `test_tc11b_*` |
-| TC-12 | Đúng mật khẩu, sai TOTP | `MFA_INVALID` | `test_tc12_password_ok_but_wrong_totp` (TV1) |
+| TC-12 | Đúng mật khẩu, sai email OTP | `MFA_INVALID` | `test_tc12_password_ok_but_wrong_email_code` (TV1) |
 | TC-13 | Có phiên nhưng không có khóa thiết bị | `SIGNATURE_INVALID` | `test_tc13_account_takeover_without_device` |
 | TC-14 | Tự duyệt | `SELF_APPROVAL` | `test_tc14_self_approval` |
 | TC-15 | Một người duyệt hai cấp | `DUPLICATE_APPROVER` | `test_tc15_same_person_cannot_approve_both_levels` |

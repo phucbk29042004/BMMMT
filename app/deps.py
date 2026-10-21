@@ -1,6 +1,6 @@
 """Dependency dùng chung cho mọi router (TV1 sở hữu).
 
-    user = Depends(current_user)                       # đã đăng nhập đầy đủ (qua cả TOTP)
+    user = Depends(current_user)                       # đã đăng nhập đầy đủ (qua email OTP)
     user = Depends(require_roles("manager","director"))
 
 `user` luôn được NẠP LẠI TỪ DB mỗi request: {"id", "username", "role"}.

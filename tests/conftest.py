@@ -4,8 +4,8 @@ import os
 
 os.environ["DB_PATH"] = ":memory:"
 os.environ["RATE_LIMIT_MAX"] = "1000"  # tắt rate limit mặc định; test_ratelimit tự hạ xuống
+os.environ["ADMIN_EMAIL"] = ""
 
-import pyotp
 import pytest
 from argon2 import PasswordHasher
 from cryptography.hazmat.primitives import hashes, serialization
@@ -14,17 +14,27 @@ from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 from fastapi.testclient import TestClient
 
 from app import db, ratelimit
+from app.config import settings
 from app.main import app
-from scripts.seed import DEV_PASSWORD, DEV_TOTP_SECRET, seed
+from app.routers import auth as auth_router
+from scripts.seed import DEV_PASSWORD, seed
 
 _PW_HASH = PasswordHasher().hash(DEV_PASSWORD)  # băm một lần cho cả phiên test
+_EMAIL_CODES = {}
 
 
 @pytest.fixture(autouse=True)
-def fresh_db():
+def fresh_db(monkeypatch):
     db.reset_for_tests()
     ratelimit.reset()
-    seed(dev_totp=True, password_hash=_PW_HASH)
+    _EMAIL_CODES.clear()
+    monkeypatch.setattr(settings, "admin_email", "")
+    monkeypatch.setattr(
+        auth_router,
+        "send_login_code",
+        lambda recipient, username, code: _EMAIL_CODES.__setitem__(username, code),
+    )
+    seed(password_hash=_PW_HASH)
     yield
 
 
@@ -43,13 +53,12 @@ def make_client():
 
 
 def login(client, username, password=DEV_PASSWORD):
-    """Đăng nhập đầy đủ (mật khẩu + TOTP). Reset bước TOTP vì cơ chế chống dùng lại mã chặn
-    việc đăng nhập lại cùng một user trong cùng 30 giây."""
-    db.execute("UPDATE users SET last_totp_step = 0, failed_attempts = 0, locked_until = NULL WHERE username = ?",
+    """Đăng nhập đầy đủ bằng email OTP."""
+    db.execute("UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE username = ?",
                (username,))
     r = client.post("/api/auth/login", json={"username": username, "password": password})
     assert r.status_code == 200, r.text
-    r = client.post("/api/auth/mfa", json={"code": pyotp.TOTP(DEV_TOTP_SECRET).now()})
+    r = client.post("/api/auth/mfa", json={"code": _EMAIL_CODES[username]})
     assert r.status_code == 200, r.text
     return client
 

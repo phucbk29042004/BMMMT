@@ -5,8 +5,7 @@ CREATE TABLE IF NOT EXISTS users (
   username        TEXT    NOT NULL UNIQUE,
   password_hash   TEXT    NOT NULL,
   role            TEXT    NOT NULL CHECK (role IN ('accountant','manager','director','admin')),
-  totp_secret     TEXT,                              -- NULL = chưa cài TOTP
-  last_totp_step  INTEGER NOT NULL DEFAULT 0,        -- chống dùng lại mã TOTP
+  email           TEXT,
   failed_attempts INTEGER NOT NULL DEFAULT 0,
   locked_until    TEXT,                              -- ISO 8601 UTC, NULL = không khóa
   created_at      TEXT    NOT NULL

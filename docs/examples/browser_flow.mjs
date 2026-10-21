@@ -1,22 +1,13 @@
 // VÍ DỤ THAM KHẢO CHO TV3: toàn bộ luồng phía trình duyệt, viết bằng WebCrypto (chạy được bằng Node 20+).
-// Cách chạy:  python -m scripts.seed --dev-totp  &&  python run.py   rồi   node docs/examples/browser_flow.mjs
+// Cách chạy: cấu hình SMTP/ADMIN_EMAIL trong .env, chạy python -m scripts.seed và python run.py,
+// sau đó chạy node docs/examples/browser_flow.mjs. Nhập mã nhận trong email khi được hỏi.
 // Phần ký ở đây GIỐNG HỆT code cần đưa vào trình duyệt (crypto.subtle).
-import { createHmac, webcrypto } from 'node:crypto';
+import { webcrypto } from 'node:crypto';
+import { createInterface } from 'node:readline/promises';
 const { subtle } = webcrypto;
 const BASE = process.env.BASE || 'http://localhost:3000/api';
 const PASSWORD = 'MatKhau@12345';
-const TOTP_SECRET = 'JBSWY3DPEHPK3PXP'; // chỉ dùng khi seed --dev-totp
-
-// ---- tiện ích TOTP (RFC 6238) để demo; trình duyệt thật thì người dùng gõ mã từ Google Authenticator
-function totp(secretB32) {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-  let bits = ''; for (const c of secretB32) bits += alphabet.indexOf(c).toString(2).padStart(5, '0');
-  const key = Buffer.from(bits.match(/.{8}/g).map((b) => parseInt(b, 2)));
-  const counter = Buffer.alloc(8); counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000)));
-  const h = createHmac('sha1', key).update(counter).digest();
-  const o = h[h.length - 1] & 15;
-  return String(((h.readUInt32BE(o) & 0x7fffffff) % 1_000_000)).padStart(6, '0');
-}
+const prompt = createInterface({ input: process.stdin, output: process.stdout });
 
 // ---- "trình duyệt" = một cookie jar + fetch. Trong trình duyệt thật cookie tự gửi kèm, không cần đoạn này.
 class Browser {
@@ -32,8 +23,11 @@ class Browser {
     return { status: res.status, data: text ? JSON.parse(text) : null };
   }
   async login(username) {
-    await this.call('POST', '/auth/login', { username, password: PASSWORD });
-    const r = await this.call('POST', '/auth/mfa', { code: totp(TOTP_SECRET) });
+    const started = await this.call('POST', '/auth/login', { username, password: PASSWORD });
+    if (started.status !== 200) throw new Error('Đăng nhập bước mật khẩu lỗi: ' + JSON.stringify(started.data));
+    console.log(`Mã xác thực đã gửi tới ${started.data.email_hint}`);
+    const code = await prompt.question(`Nhập mã email của ${username}: `);
+    const r = await this.call('POST', '/auth/mfa', { code });
     if (r.status !== 200) throw new Error('Đăng nhập thất bại: ' + JSON.stringify(r.data));
   }
 }
@@ -94,3 +88,4 @@ console.log('Gửi lại yêu cầu cũ:', dup.status, dup.data.error.code);
 
 const v = await dir.call('GET', '/audit/verify');
 console.log('Audit hash chain:', v.data);
+prompt.close();

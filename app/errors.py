@@ -7,9 +7,10 @@ from typing import Any, Dict, Optional
 
 CATALOG = {
     "VALIDATION_ERROR": (400, "Dữ liệu gửi lên sai định dạng."),
-    "NOT_AUTHENTICATED": (401, "Chưa đăng nhập hoặc chưa qua bước xác thực TOTP."),
+    "NOT_AUTHENTICATED": (401, "Chưa đăng nhập hoặc chưa hoàn tất xác thực MFA."),
     "AUTH_INVALID_CREDENTIALS": (401, "Sai tên đăng nhập hoặc mật khẩu."),
-    "MFA_INVALID": (401, "Mã TOTP sai, hết hạn hoặc đã được sử dụng."),
+    "MFA_INVALID": (401, "Mã xác thực sai, hết hạn hoặc đã được sử dụng."),
+    "MFA_DELIVERY_FAILED": (503, "Không gửi được mã xác thực qua email. Vui lòng thử lại hoặc liên hệ quản trị viên."),
     "FORBIDDEN_ROLE": (403, "Vai trò của bạn không được phép thực hiện thao tác này."),
     "SELF_APPROVAL": (403, "Người tạo giao dịch không được tự duyệt."),
     "DUPLICATE_APPROVER": (403, "Một người không được duyệt hai cấp của cùng một giao dịch."),
@@ -25,6 +26,7 @@ CATALOG = {
     "TX_WRONG_STATE": (409, "Giao dịch không ở trạng thái cho phép thao tác này."),
     "TX_EXPIRED": (410, "Giao dịch đã hết hạn."),
     "USERNAME_TAKEN": (409, "Tên đăng nhập đã tồn tại."),
+    "EMAIL_TAKEN": (409, "Email đã được gán cho tài khoản khác."),
     "DEVICE_LIMIT": (409, "Đã đạt số thiết bị tối đa."),
     "ACCOUNT_LOCKED": (423, "Tài khoản đang bị khóa tạm thời."),
     "RATE_LIMITED": (429, "Thử quá nhiều lần, vui lòng chờ một lát."),

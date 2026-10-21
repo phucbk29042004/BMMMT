@@ -43,6 +43,9 @@ def init(path: str) -> None:
             conn.execute("PRAGMA journal_mode = WAL")
         with open(_SCHEMA, encoding="utf-8") as f:
             conn.executescript(f.read())
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "email" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
         _conn = conn
 
 

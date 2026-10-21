@@ -335,11 +335,9 @@ def test_visibility_rules(w, login_as):
     mine = w.create()
     other_acct_tx = None
     admin = login_as("admin01")
-    admin.post("/api/users", json={"username": "ketoan02", "password": "MatKhau@12345", "role": "accountant"})
+    admin.post("/api/users", json={"username": "ketoan02", "password": "MatKhau@12345",
+                                   "role": "accountant", "email": "ketoan02@example.test"})
     from conftest import login
-    from scripts.seed import DEV_PASSWORD
-    # ketoan02 chưa cài TOTP: đặt TOTP dev cho tiện test
-    db.execute("UPDATE users SET totp_secret = 'JBSWY3DPEHPK3PXP' WHERE username = 'ketoan02'")
     from fastapi.testclient import TestClient
     from app.main import app
     c2 = login(TestClient(app), "ketoan02")

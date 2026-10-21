@@ -22,10 +22,9 @@ def _hash(token: str) -> str:
 
 
 class Session:
-    """data có thể chứa:
-       pending : {"userId": int, "stage": "MFA" | "TOTP_SETUP"}   (đã qua mật khẩu, chưa qua TOTP)
-       pendingTotpSecret : str                                    (đang cài TOTP)
-       user    : {"id", "username", "role"}                       (đã đăng nhập đầy đủ)
+    """    data có thể chứa:
+       pending : trạng thái chờ xác minh email OTP sau bước mật khẩu
+       user    : {"id", "username", "role"} (đã đăng nhập đầy đủ)
     """
 
     def __init__(self, sid: Optional[str] = None, data: Optional[Dict[str, Any]] = None):

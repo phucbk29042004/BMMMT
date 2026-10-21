@@ -15,7 +15,12 @@ py -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
 copy .env.example .env
-python -m scripts.seed --dev-totp
+```
+
+Mở `.env`, đặt `ADMIN_EMAIL` thành email bạn muốn nhận mã, rồi điền thông tin SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`) do nhà cung cấp email cấp. Với SMTP cổng 587, giữ `SMTP_STARTTLS=true`; với cổng 465, đặt `SMTP_USE_SSL=true` và `SMTP_STARTTLS=false`. Không chia sẻ hoặc commit `SMTP_PASSWORD`. Sau đó chạy:
+
+```bat
+python -m scripts.seed
 python run.py
 ```
 
@@ -33,15 +38,13 @@ Mở trình duyệt:
 | Việc | Lệnh |
 |---|---|
 | Chạy server | `python run.py` (thêm `--reload` khi đang code) |
-| Tạo người dùng mẫu, TOTP cố định (chỉ khi dev) | `python -m scripts.seed --dev-totp` |
-| Tạo người dùng mẫu, phải quét QR thật | `python -m scripts.seed` |
-| Lấy mã TOTP hiện tại của user mẫu | `python -m scripts.totp` |
-| Chạy toàn bộ test (71 test) | `python -m pytest` |
+| Tạo người dùng mẫu (mã MFA gửi tới `ADMIN_EMAIL`) | `python -m scripts.seed` |
+| Chạy toàn bộ test (74 test) | `python -m pytest` |
 | Chạy riêng phần TV1 / TV2 | `python -m pytest tests/test_auth.py tests/test_devices.py` / `python -m pytest tests/test_transactions.py tests/test_crypto.py` |
 | Demo sửa audit log | `python -m scripts.tamper_log 8` rồi gọi `GET /api/audit/verify` |
 | Xóa sạch dữ liệu làm lại | xóa thư mục `data\` rồi chạy lại seed |
 
-Mật khẩu mọi user mẫu: `MatKhau@12345`. Users: `admin01`, `ketoan01`, `quanly01`, `giamdoc01`, `quanly02`.
+Mật khẩu mọi user mẫu: `MatKhau@12345`. Users: `admin01`, `ketoan01`, `quanly01`, `giamdoc01`, `quanly02`. Khi seed dev, tài khoản `admin01` nhận mã MFA tại `ADMIN_EMAIL`; các user mẫu còn lại dùng địa chỉ giữ chỗ `@example.test`. Tài khoản tạo mới cần có email riêng và sẽ nhận mã ở địa chỉ đó.
 
 ## 3. Cấu trúc và ai sở hữu
 
@@ -57,7 +60,7 @@ trustsign/
 │   ├── routers/transactions.py, audit.py                                      (TV2)
 │   └── services/crypto.py, audit.py, approval.py                              (TV2)
 ├── public/                     giao diện                                      (TV3)
-├── scripts/                    seed, totp, tamper_log                         (TV1 / TV4)
+├── scripts/                    seed, tamper_log                                (TV1 / TV4)
 ├── tests/                      71 test                                        (TV1, TV2, TV4)
 └── docs/
     ├── API.md                  hợp đồng API chung của cả nhóm

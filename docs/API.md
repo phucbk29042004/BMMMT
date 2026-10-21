@@ -64,10 +64,10 @@
 
 ### Quy tắc bảo mật chung cho mọi endpoint
 
-- Mọi endpoint (trừ `/auth/login` và `/auth/mfa`) yêu cầu phiên đăng nhập **đã qua TOTP**.
+- Mọi endpoint (trừ `/auth/login` và `/auth/mfa`) yêu cầu phiên đăng nhập **đã hoàn tất MFA qua email**.
 - Dữ liệu vào đều được kiểm tra bằng `pydantic`; sai định dạng trả `VALIDATION_ERROR`.
-- Không trả `password_hash`, `totp_secret` ở bất kỳ phản hồi nào.
-- Giới hạn tốc độ (`app/ratelimit.py`): đăng nhập và TOTP tối đa 5 lần/phút/IP, quá thì trả `RATE_LIMITED`.
+- Không trả `password_hash` hoặc mã OTP ở bất kỳ phản hồi nào; OTP chỉ được gửi tới địa chỉ email đã gán.
+- Giới hạn tốc độ (`app/ratelimit.py`): đăng nhập, nhập mã và gửi lại mã tối đa 5 lần/phút/IP, quá thì trả `RATE_LIMITED`.
 - Thông báo đăng nhập sai **không** tiết lộ username hay mật khẩu sai (luôn trả `AUTH_INVALID_CREDENTIALS`).
 
 ---
@@ -227,7 +227,7 @@ function verifySignature(publicKeyB64, signingString, signatureB64) {
 
 Phụ trách: **TV1**
 
-Đăng nhập gồm 2 bước: mật khẩu, rồi TOTP. Sau bước 1 phiên ở trạng thái "chờ MFA", chưa gọi được các API khác.
+Đăng nhập gồm 2 bước: mật khẩu, rồi mã OTP gửi tới email tài khoản. Sau bước 1 phiên ở trạng thái "chờ MFA", chưa gọi được các API khác.
 
 ### `POST /auth/login`
 
@@ -238,23 +238,18 @@ Bước 1: kiểm tra mật khẩu.
 { "username": "ketoan01", "password": "MatKhau@123" }
 ```
 
-**Response 200**
+**Response 200** — hệ thống gửi mã 6 số qua email; không trả mã trong response.
 ```json
-{ "status": "MFA_REQUIRED" }
+{ "status": "MFA_REQUIRED", "email_hint": "k***@example.com" }
 ```
 
-Nếu tài khoản chưa cài TOTP:
-```json
-{ "status": "TOTP_SETUP_REQUIRED" }
-```
+**Lỗi:** `AUTH_INVALID_CREDENTIALS` (401), `ACCOUNT_LOCKED` (423), `MFA_DELIVERY_FAILED` (503), `RATE_LIMITED` (429), `VALIDATION_ERROR` (400)
 
-**Lỗi:** `AUTH_INVALID_CREDENTIALS` (401), `ACCOUNT_LOCKED` (423), `RATE_LIMITED` (429), `VALIDATION_ERROR` (400)
-
-Quy tắc: sai mật khẩu hoặc TOTP 5 lần thì khóa tài khoản 15 phút, ngoại trừ tài khoản `admin`. Tài khoản admin không bị khóa theo số lần đăng nhập sai; giới hạn tốc độ theo IP vẫn áp dụng.
+Quy tắc: sai mật khẩu hoặc email OTP 5 lần thì khóa tài khoản 15 phút, ngoại trừ tài khoản `admin`. Mã OTP hết hạn sau `EMAIL_OTP_TTL_MINUTES` (mặc định 10 phút), chỉ dùng một lần. API không bao giờ trả mã xác thực. Giới hạn tốc độ theo IP vẫn áp dụng cả với admin.
 
 ### `POST /auth/mfa`
 
-Bước 2: nhập mã TOTP 6 số.
+Bước 2: nhập mã 6 số nhận được qua email.
 
 **Request**
 ```json
@@ -268,34 +263,17 @@ Bước 2: nhập mã TOTP 6 số.
 }
 ```
 
-**Lỗi:** `MFA_INVALID` (401), `NOT_AUTHENTICATED` (401, chưa qua bước 1), `ACCOUNT_LOCKED` (423), `RATE_LIMITED` (429)
+**Lỗi:** `MFA_INVALID` (401, sai/hết hạn/đã dùng), `NOT_AUTHENTICATED` (401, chưa qua bước 1), `ACCOUNT_LOCKED` (423), `RATE_LIMITED` (429)
 
-Quy tắc: cho phép lệch ±1 bước (30 giây). Mỗi mã TOTP chỉ dùng được **một lần** (chống dùng lại mã vừa bị nhìn trộm).
+Mã được lưu dạng HMAC trong phiên server-side, không ghi nội dung mã vào log hoặc DB. Nhập sai sẽ tính vào giới hạn đăng nhập.
 
-### `POST /auth/totp/setup`
+### `POST /auth/mfa/resend`
 
-Dùng ở lần đăng nhập đầu khi `status = TOTP_SETUP_REQUIRED`. Trả về mã QR để quét bằng Google Authenticator.
-
-**Response 200**
-```json
-{
-  "otpauth_url": "otpauth://totp/TrustSign:quanly01?secret=ABCDEF...&issuer=TrustSign",
-  "qr_data_url": "data:image/png;base64,iVBORw0KGgo..."
-}
-```
-
-### `POST /auth/totp/confirm`
-
-Xác nhận đã quét QR bằng cách nhập mã đầu tiên.
-
-**Request**
-```json
-{ "code": "123456" }
-```
+Gửi mã mới tới email đang chờ xác thực; mã cũ mất hiệu lực. Chỉ gọi được sau bước login mật khẩu và chịu rate limit.
 
 **Response 200**
 ```json
-{ "user": { "id": 3, "username": "quanly01", "role": "manager" } }
+{ "status": "MFA_REQUIRED", "email_hint": "k***@example.com" }
 ```
 
 ### `POST /auth/logout`
@@ -323,19 +301,19 @@ Phụ trách: **TV1**. Chỉ `admin` được gọi.
 
 Tạo người dùng mới.
 
-**Request**
+**Request** (email bắt buộc; mật khẩu tối thiểu 10 ký tự)
 ```json
-{ "username": "quanly01", "password": "MatKhau@123", "role": "manager" }
+{ "username": "quanly01", "password": "MatKhau@123", "role": "manager", "email": "quanly01@example.com" }
 ```
 
 `role` thuộc `accountant | manager | director | admin`.
 
 **Response 201**
 ```json
-{ "id": 3, "username": "quanly01", "role": "manager" }
+{ "id": 3, "username": "quanly01", "role": "manager", "email": "quanly01@example.com" }
 ```
 
-**Lỗi:** `FORBIDDEN_ROLE` (403), `VALIDATION_ERROR` (400), `USERNAME_TAKEN` (409)
+**Lỗi:** `FORBIDDEN_ROLE` (403), `VALIDATION_ERROR` (400), `USERNAME_TAKEN` / `EMAIL_TAKEN` (409)
 
 Quy tắc mật khẩu: tối thiểu 10 ký tự, băm bằng `argon2`.
 
@@ -345,7 +323,7 @@ Quy tắc mật khẩu: tối thiểu 10 ký tự, băm bằng `argon2`.
 ```json
 {
   "users": [
-    { "id": 1, "username": "admin", "role": "admin", "locked": false }
+    { "id": 1, "username": "admin", "role": "admin", "email": "admin@example.com", "locked": false }
   ]
 }
 ```
@@ -558,7 +536,7 @@ Nộp chữ ký để duyệt.
 
 | # | Kiểm tra | Mã lỗi nếu sai |
 |---|---|---|
-| 1 | Phiên đăng nhập hợp lệ, đã qua TOTP | `NOT_AUTHENTICATED` |
+| 1 | Phiên đăng nhập hợp lệ, đã hoàn tất email MFA | `NOT_AUTHENTICATED` |
 | 2 | Vai trò được phép duyệt cấp này | `FORBIDDEN_ROLE` |
 | 3 | Giao dịch tồn tại, đúng trạng thái chờ duyệt | `TX_NOT_FOUND`, `TX_WRONG_STATE` |
 | 4 | Giao dịch chưa hết hạn | `TX_EXPIRED` |
@@ -666,7 +644,7 @@ Duyệt lại toàn bộ chuỗi và kiểm tra tính toàn vẹn. Chỉ `admin`
 | Event | Khi nào ghi |
 |---|---|
 | `LOGIN_SUCCESS` / `LOGIN_FAILED` | Kết quả đăng nhập |
-| `MFA_SUCCESS` / `MFA_FAILED` | Kết quả TOTP |
+| `MFA_SUCCESS` / `MFA_FAILED` | Kết quả xác minh email OTP |
 | `ACCOUNT_LOCKED` | Khóa tài khoản do nhập sai nhiều lần |
 | `USER_CREATED` | Admin tạo người dùng |
 | `DEVICE_REGISTERED` / `DEVICE_REVOKED` | Đăng ký, thu hồi thiết bị |
@@ -683,9 +661,10 @@ Duyệt lại toàn bộ chuỗi và kiểm tra tính toàn vẹn. Chỉ `admin`
 | Mã lỗi | HTTP | Ý nghĩa (hiển thị cho người dùng) |
 |---|---|---|
 | `VALIDATION_ERROR` | 400 | Dữ liệu gửi lên sai định dạng |
-| `NOT_AUTHENTICATED` | 401 | Chưa đăng nhập hoặc chưa qua TOTP |
+| `NOT_AUTHENTICATED` | 401 | Chưa đăng nhập hoặc chưa hoàn tất MFA |
 | `AUTH_INVALID_CREDENTIALS` | 401 | Sai tên đăng nhập hoặc mật khẩu |
-| `MFA_INVALID` | 401 | Mã TOTP sai, hết hạn hoặc đã dùng |
+| `MFA_INVALID` | 401 | Mã email OTP sai, hết hạn hoặc đã dùng |
+| `MFA_DELIVERY_FAILED` | 503 | Không gửi được mã qua email hoặc tài khoản chưa có email |
 | `FORBIDDEN_ROLE` | 403 | Vai trò không được phép thực hiện thao tác này |
 | `SELF_APPROVAL` | 403 | Người tạo giao dịch không được tự duyệt |
 | `DUPLICATE_APPROVER` | 403 | Một người không được duyệt hai cấp của cùng giao dịch |
@@ -701,6 +680,7 @@ Duyệt lại toàn bộ chuỗi và kiểm tra tính toàn vẹn. Chỉ `admin`
 | `TX_WRONG_STATE` | 409 | Giao dịch không ở trạng thái cho phép thao tác này |
 | `TX_EXPIRED` | 410 | Giao dịch đã hết hạn |
 | `USERNAME_TAKEN` | 409 | Tên đăng nhập đã tồn tại |
+| `EMAIL_TAKEN` | 409 | Email đã được gán cho tài khoản khác |
 | `DEVICE_LIMIT` | 409 | Đã đạt số thiết bị tối đa |
 | `ACCOUNT_LOCKED` | 423 | Tài khoản đang bị khóa tạm thời |
 | `RATE_LIMITED` | 429 | Thử quá nhiều lần, vui lòng chờ |
@@ -767,7 +747,7 @@ Bảng này nối **rủi ro, cơ chế, kết quả mong đợi, test case**. T
 
 | Mã | Tình huống | Kết quả mong đợi |
 |---|---|---|
-| TC-01 | Đăng nhập đúng mật khẩu và TOTP | 200, có phiên |
+| TC-01 | Đăng nhập đúng mật khẩu và email OTP | 200, có phiên |
 | TC-02 | Giao dịch 20 triệu, `manager` ký đúng | `APPROVED` ngay sau cấp 1 |
 | TC-03 | Giao dịch 200 triệu, `manager` rồi `director` ký đúng | `PENDING_L2`, sau đó `APPROVED` |
 | TC-04 | Audit log sau chuỗi thao tác bình thường | `/audit/verify` trả `valid: true` |
@@ -783,12 +763,12 @@ Bảng này nối **rủi ro, cơ chế, kết quả mong đợi, test case**. T
 | TC-09 | **Chữ ký bằng khóa lạ** (kẻ tấn công tự sinh khóa) | Kiểm tra bằng khóa công khai đã đăng ký | `SIGNATURE_INVALID` |
 | TC-10 | **Thiết bị chưa đăng ký** hoặc của người khác | Kiểm tra thiết bị thuộc người duyệt | `DEVICE_NOT_REGISTERED` |
 | TC-11 | **Thiết bị đã bị thu hồi** (mất máy) | Trạng thái thiết bị | `DEVICE_REVOKED` |
-| TC-12 | **Chiếm tài khoản**: có mật khẩu nhưng sai TOTP | MFA | `MFA_INVALID` |
+| TC-12 | **Chiếm tài khoản**: có mật khẩu nhưng sai email OTP | MFA | `MFA_INVALID` |
 | TC-13 | **Chiếm tài khoản**: có cả mật khẩu và phiên nhưng không có thiết bị | Duyệt cần chữ ký thiết bị | `DEVICE_NOT_REGISTERED` |
 | TC-14 | **Tự duyệt**: người tạo duyệt giao dịch của chính mình | Luật tách nhiệm vụ | `SELF_APPROVAL` |
 | TC-15 | **Một người duyệt cả hai cấp** | Luật 2 người độc lập | `DUPLICATE_APPROVER` |
 | TC-16 | **Sai vai trò**: `accountant` gọi API duyệt | Phân quyền | `FORBIDDEN_ROLE` |
-| TC-17 | **Dò mật khẩu/TOTP** (thử sai liên tục) | Rate limit và khóa tài khoản | `RATE_LIMITED`, `ACCOUNT_LOCKED` |
+| TC-17 | **Dò mật khẩu/email OTP** (thử sai liên tục) | Rate limit và khóa tài khoản | `RATE_LIMITED`, `ACCOUNT_LOCKED` |
 | TC-18 | **Sửa log trực tiếp trong SQLite** | Hash chain | `/audit/verify` trả `valid: false`, `broken_at` đúng dòng |
 | TC-19 | **Duyệt giao dịch hết hạn** | Thời hạn giao dịch | `TX_EXPIRED` |
 | TC-20 | **Duyệt song song cùng một nonce** (race) | Đánh dấu nonce nguyên tử trong transaction | Một request thành công, request còn lại `NONCE_USED` |
@@ -812,6 +792,16 @@ Bảng này nối **rủi ro, cơ chế, kết quả mong đợi, test case**. T
 | `MAX_LOGIN_ATTEMPTS` | `5` | Số lần sai trước khi khóa |
 | `LOCK_MINUTES` | `15` | Thời gian khóa tài khoản |
 | `MAX_DEVICES_PER_USER` | `3` | Số thiết bị tối đa mỗi người |
+| `ADMIN_EMAIL` | rỗng | Email nhận mã cho các tài khoản mẫu do script seed tạo |
+| `SMTP_HOST` | rỗng | Host SMTP của nhà cung cấp email |
+| `SMTP_PORT` | `587` | Cổng SMTP (thường 587 với STARTTLS hoặc 465 với SSL) |
+| `SMTP_USERNAME` / `SMTP_PASSWORD` | rỗng | Thông tin xác thực SMTP; không commit |
+| `SMTP_FROM` | rỗng | Địa chỉ email người gửi được nhà cung cấp cho phép |
+| `SMTP_USE_SSL` | `false` | Dùng SSL trực tiếp (thường port 465) |
+| `SMTP_STARTTLS` | `true` | Nâng cấp kết nối SMTP bằng STARTTLS (thường port 587) |
+| `EMAIL_OTP_TTL_MINUTES` | `10` | Thời hạn mã email OTP |
+| `EMAIL_OTP_PEPPER` | khóa ngẫu nhiên khi khởi động | Khóa HMAC để lưu OTP dạng băm; nên đặt cố định trong `.env` (có thể sinh bằng `python -c "import secrets; print(secrets.token_hex(32))"`) |
+| `SMTP_TIMEOUT_SECONDS` | `15` | Timeout kết nối SMTP |
 
 ### Dữ liệu mẫu để cả nhóm dùng chung khi dev và demo
 
@@ -823,7 +813,7 @@ Bảng này nối **rủi ro, cơ chế, kết quả mong đợi, test case**. T
 | `giamdoc01` | `director` | Duyệt cấp 2 |
 | `quanly02` | `manager` | Dùng cho test duyệt nhầm người |
 
-TV1 viết script `python -m scripts.seed` để tạo các tài khoản này (mật khẩu chỉ dùng khi dev, không dùng trong báo cáo công khai).
+TV1 viết script `python -m scripts.seed` để tạo các tài khoản này (mật khẩu chỉ dùng khi dev, không dùng trong báo cáo công khai). Trong môi trường dev, script gán `ADMIN_EMAIL` cho `admin01`; các tài khoản mẫu còn lại dùng email giữ chỗ `@example.test`. User tạo qua API cần email riêng.
 
 ---
 
@@ -833,4 +823,5 @@ TV1 viết script `python -m scripts.seed` để tạo các tài khoản này (m
 |---|---|---|
 | 2026-10-02 | Nhóm | Tạo bản nháp 1.0 |
 | 2026-10-02 | Nhóm | Chuyển backend sang Python/FastAPI. Hợp đồng API (đường dẫn, JSON, mã lỗi, chuỗi ký) giữ nguyên. Chỉ sửa các chỗ nhắc công nghệ và bỏ `SESSION_SECRET`. Xem thêm docs/INTERFACE-TV1.md và docs/INTERFACE-TV2.md cho các chi tiết cài đặt |
+| 2026-10-21 | Nhóm | Thay MFA TOTP bằng email OTP; thêm email user và cấu hình SMTP |
 | | | |

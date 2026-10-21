@@ -19,29 +19,34 @@ class CreateUserIn(BaseModel):
     username: str = Field(pattern=r"^[a-zA-Z0-9_.-]{3,50}$")
     password: str = Field(min_length=10, max_length=200)
     role: Literal["accountant", "manager", "director", "admin"]
+    email: str = Field(min_length=6, max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 @router.post("", status_code=201)
 def create_user(body: CreateUserIn, admin: Dict[str, Any] = Depends(require_roles("admin"))):
     if db.query_one("SELECT 1 AS x FROM users WHERE username = ?", (body.username,)):
         raise AppError("USERNAME_TAKEN")
+    email = body.email.strip().lower()
+    if db.query_one("SELECT 1 AS x FROM users WHERE email = ?", (email,)):
+        raise AppError("EMAIL_TAKEN")
     cur = db.execute(
-        "INSERT INTO users (username, password_hash, role, created_at) VALUES (?,?,?,?)",
-        (body.username, _ph.hash(body.password), body.role, now_iso()),
+        "INSERT INTO users (username, password_hash, role, email, created_at) VALUES (?,?,?,?,?)",
+        (body.username, _ph.hash(body.password), body.role, email, now_iso()),
     )
     append_audit("USER_CREATED", admin["id"], {"user_id": cur.lastrowid, "username": body.username, "role": body.role})
-    return {"id": cur.lastrowid, "username": body.username, "role": body.role}
+    return {"id": cur.lastrowid, "username": body.username, "role": body.role, "email": email}
 
 
 @router.get("")
 def list_users(admin: Dict[str, Any] = Depends(require_roles("admin"))):
-    rows = db.query_all("SELECT id, username, role, locked_until FROM users ORDER BY id")
+    rows = db.query_all("SELECT id, username, role, email, locked_until FROM users ORDER BY id")
     return {
         "users": [
             {
                 "id": r["id"],
                 "username": r["username"],
                 "role": r["role"],
+                "email": r["email"],
                 "locked": r["role"] != "admin" and bool(r["locked_until"]) and not is_past(r["locked_until"]),
             }
             for r in rows

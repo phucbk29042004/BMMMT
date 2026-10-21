@@ -9,7 +9,7 @@ Chi tiết từng endpoint (JSON vào ra, mã lỗi) nằm ở `docs/API.md`; fi
 
 | Hạng mục | Vị trí | Ai dùng |
 |---|---|---|
-| Đăng nhập 2 bước, TOTP, khóa tài khoản, rate limit | `POST /api/auth/*` | TV3, TV4 |
+| Đăng nhập 2 bước bằng email OTP, khóa tài khoản, rate limit | `POST /api/auth/*` | TV3, TV4 |
 | Quản lý người dùng (admin) | `/api/users` | TV3, TV4 |
 | Đăng ký / thu hồi thiết bị | `/api/devices/*` | TV3, TV4 |
 | Phiên đăng nhập lưu phía server | `app/session.py` | TV2 (gián tiếp) |
@@ -17,7 +17,7 @@ Chi tiết từng endpoint (JSON vào ra, mã lỗi) nằm ở `docs/API.md`; fi
 | Truy cập CSDL + transaction | `app/db.py` | TV2 |
 | Toàn bộ schema SQLite | `app/schema.sql` | TV2 |
 | Bảng mã lỗi + `AppError` | `app/errors.py` | TV2, TV3 |
-| Dữ liệu mẫu, script lấy mã TOTP | `scripts/seed.py`, `scripts/totp.py` | TV3, TV4 |
+| Dữ liệu mẫu | `scripts/seed.py` | TV3, TV4 |
 
 ---
 
@@ -36,11 +36,11 @@ def handler(user = Depends(require_roles("manager", "director"))):
 
 | Dependency | Khi nào dùng | Lỗi tự ném |
 |---|---|---|
-| `current_user` | Chỉ cần đã đăng nhập đầy đủ (qua cả TOTP) | `NOT_AUTHENTICATED` |
+| `current_user` | Chỉ cần đã đăng nhập đầy đủ (qua cả email OTP) | `NOT_AUTHENTICATED` |
 | `require_roles("a", "b")` | Giới hạn theo vai trò | `NOT_AUTHENTICATED`, `FORBIDDEN_ROLE` |
 
 Lưu ý:
-- Phiên "mới qua mật khẩu, chưa qua TOTP" **không** được coi là đã đăng nhập.
+- Phiên "mới qua mật khẩu, chưa xác minh email OTP" **không** được coi là đã đăng nhập.
 - `user["role"]` được đọc lại từ DB ở mỗi request, nên đổi vai trò có hiệu lực ngay. Các test TC-14 và TC-15 dựa vào tính chất này.
 
 ### 2.2 Truy cập CSDL
@@ -90,13 +90,14 @@ TV1 **ghi** các sự kiện audit sau (đã có trong code): `LOGIN_SUCCESS`, `
 
 ```
 POST /api/auth/login {username, password}
-   ├─ {"status":"MFA_REQUIRED"}        -> POST /api/auth/mfa {code}            -> {user}
-   └─ {"status":"TOTP_SETUP_REQUIRED"} -> POST /api/auth/totp/setup            -> hiển thị qr_data_url
-                                          POST /api/auth/totp/confirm {code}   -> {user}
+   -> {"status":"MFA_REQUIRED", "email_hint":"..."} (server gửi OTP vào email)
+   -> người dùng nhập OTP trong email
+   -> POST /api/auth/mfa {code} -> {user}
 ```
 
 - Cookie phiên tên `connect.sid` do server tự đặt (`httpOnly`), `fetch` cùng origin tự gửi kèm. **JavaScript không đọc được cookie này, đó là chủ ý.**
 - Sau `/auth/mfa` thành công, gọi `GET /api/auth/me` để lấy `{id, username, role}` và quyết định hiển thị màn hình nào.
+- FE chỉ hiện ô nhập mã; không có API trả mã OTP. Có thể gọi `POST /api/auth/mfa/resend` để gửi mã mới.
 - Mọi lỗi có dạng `{"error": {"code", "message", "details"}}`. Dùng `code` để ánh xạ thông báo và biểu tượng (bảng mã lỗi ở mục 9 của `API.md`).
 
 ### 3.2 Đăng ký thiết bị (phần của TV3 phải làm đúng)
@@ -123,13 +124,13 @@ Ví dụ chạy được, đúng luồng này: `docs/examples/browser_flow.mjs` 
 
 | Cần gì | Lấy ở đâu |
 |---|---|
-| Tài khoản mẫu | `python -m scripts.seed --dev-totp`. Mật khẩu `MatKhau@12345`. Users: `admin01`, `ketoan01`, `quanly01`, `giamdoc01`, `quanly02` |
-| Mã TOTP hiện tại | `python -m scripts.totp` |
+| Tài khoản mẫu | `python -m scripts.seed`. Mật khẩu `MatKhau@12345`. Users: `admin01`, `ketoan01`, `quanly01`, `giamdoc01`, `quanly02` |
+| Email nhận OTP cho user mẫu | Cấu hình `ADMIN_EMAIL` và SMTP trong `.env`; các mã mẫu được chuyển tới địa chỉ này |
 | Test đã có cho phần TV1 | `tests/test_auth.py`, `tests/test_devices.py` |
 
 Lưu ý khi viết script tấn công:
-- **Mã TOTP chỉ dùng được một lần cho mỗi bước 30 giây của mỗi user.** Script nên đăng nhập một lần rồi dùng lại cookie, không đăng nhập lại liên tục.
-- Rate limit mặc định 5 lần/phút/IP cho `/auth/login`, `/auth/mfa`, `/auth/totp/confirm`. Muốn tấn công dò mật khẩu để minh họa thì xem `test_tc17_*`.
+- **Email OTP hết hạn sau 10 phút và chỉ dùng một lần.** Script nên đăng nhập một lần rồi dùng lại cookie, không đăng nhập lại liên tục.
+- Rate limit mặc định 5 lần/phút/IP cho `/auth/login`, `/auth/mfa`, `/auth/mfa/resend`. Muốn mô phỏng dò mật khẩu/MFA xem `test_tc17_*`.
 - Khóa tài khoản sau 5 lần sai (15 phút). Muốn mở khóa khi demo: `UPDATE users SET locked_until = NULL, failed_attempts = 0`.
 
 ---
@@ -147,7 +148,7 @@ Lưu ý khi viết script tấn công:
 ## 6. Giới hạn đã biết (đưa vào báo cáo)
 
 1. **Khóa tài khoản có thể bị lợi dụng để khóa người khác (DoS).** Đây là trade-off giữa chống dò mật khẩu và tính sẵn sàng.
-2. **Đăng ký TOTP lần đầu chỉ cần mật khẩu.** Ai biết mật khẩu trước chủ tài khoản có thể cài TOTP của mình.
-3. **Kẻ có đủ mật khẩu và TOTP của người duyệt có thể đăng ký thiết bị MỚI** (vì có proof of possession với khóa của chính họ) rồi ký duyệt. Hướng khắc phục dài hạn: thiết bị mới phải chờ một khoảng (ví dụ 24 giờ) và cần admin xác nhận qua kênh khác trước khi được dùng để duyệt.
+2. **Email MFA phụ thuộc vào bảo mật hộp thư và cấu hình SMTP.** Nếu email bị chiếm, kẻ tấn công có thể nhận mã xác thực.
+3. **Kẻ chiếm được mật khẩu và hộp thư của người duyệt có thể đăng ký thiết bị MỚI** (vì có proof of possession với khóa của chính họ) rồi ký duyệt. Hướng khắc phục dài hạn: thiết bị mới phải chờ một khoảng (ví dụ 24 giờ) và cần admin xác nhận qua kênh khác trước khi được dùng để duyệt.
 4. **Rate limit lưu trong bộ nhớ theo IP**: khởi động lại server là mất; sau reverse proxy cần cấu hình lấy IP thật.
 5. **Cookie chưa đặt `Secure`** vì demo chạy `http://localhost`; triển khai thật phải dùng HTTPS và `secure=True` trong `app/session.py`.

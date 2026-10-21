@@ -1,27 +1,24 @@
-"""Test phần TV1: xác thực, TOTP, khóa tài khoản, người dùng."""
-import pyotp
-
+"""Test phần TV1: xác thực email OTP, khóa tài khoản, người dùng."""
 from app import db, ratelimit
 from app.config import settings
-from scripts.seed import DEV_PASSWORD, DEV_TOTP_SECRET
-
-from conftest import err, login
-
-
-def totp():
-    return pyotp.TOTP(DEV_TOTP_SECRET).now()
+from app.routers import auth as auth_router
+from app.services.email import EmailDeliveryError
+from scripts.seed import DEV_PASSWORD
+from conftest import _EMAIL_CODES, err, login
 
 
-def test_tc01_login_password_and_totp(make_client):
+def test_login_password_then_email_otp(make_client):
     c = make_client()
     r1 = c.post("/api/auth/login", json={"username": "quanly01", "password": DEV_PASSWORD})
-    assert r1.status_code == 200 and r1.json() == {"status": "MFA_REQUIRED"}
-    r2 = c.post("/api/auth/mfa", json={"code": totp()})
+    assert r1.status_code == 200
+    assert r1.json() == {"status": "MFA_REQUIRED", "email_hint": "q*******@example.test"}
+    code = _EMAIL_CODES["quanly01"]
+    r2 = c.post("/api/auth/mfa", json={"code": code})
     assert r2.status_code == 200
     assert r2.json()["user"] == {"id": 3, "username": "quanly01", "role": "manager"}
     me = c.get("/api/auth/me")
     assert me.status_code == 200 and me.json()["username"] == "quanly01"
-    assert "password_hash" not in r2.text and "totp_secret" not in r2.text
+    assert code not in r1.text and "password_hash" not in r2.text
 
 
 def test_wrong_password_and_unknown_user_give_same_error(make_client):
@@ -33,10 +30,11 @@ def test_wrong_password_and_unknown_user_give_same_error(make_client):
     assert a.json()["error"]["message"] == b.json()["error"]["message"]
 
 
-def test_tc12_password_ok_but_wrong_totp(make_client):
+def test_tc12_password_ok_but_wrong_email_code(make_client):
     c = make_client()
     c.post("/api/auth/login", json={"username": "giamdoc01", "password": DEV_PASSWORD})
-    r = c.post("/api/auth/mfa", json={"code": "000000"})
+    wrong_code = "000000" if _EMAIL_CODES["giamdoc01"] != "000000" else "000001"
+    r = c.post("/api/auth/mfa", json={"code": wrong_code})
     assert r.status_code == 401 and err(r) == "MFA_INVALID"
     assert c.get("/api/auth/me").status_code == 401
 
@@ -49,34 +47,53 @@ def test_password_only_session_cannot_call_other_apis(make_client):
 
 
 def test_mfa_without_login_step_one(make_client):
-    r = make_client().post("/api/auth/mfa", json={"code": totp()})
+    r = make_client().post("/api/auth/mfa", json={"code": "123456"})
     assert r.status_code == 401 and err(r) == "NOT_AUTHENTICATED"
 
 
-def test_totp_code_cannot_be_reused(make_client):
-    code = totp()
-    c1, c2 = make_client(), make_client()
-    c1.post("/api/auth/login", json={"username": "quanly02", "password": DEV_PASSWORD})
-    assert c1.post("/api/auth/mfa", json={"code": code}).status_code == 200
-    c2.post("/api/auth/login", json={"username": "quanly02", "password": DEV_PASSWORD})
-    r = c2.post("/api/auth/mfa", json={"code": code})
-    assert r.status_code == 401 and err(r) == "MFA_INVALID"
-
-
-def test_first_login_totp_setup_and_confirm(login_as, make_client):
-    admin = login_as("admin01")
-    assert admin.post("/api/users", json={"username": "nhanvien.moi", "password": "MatKhau@Moi123",
-                                          "role": "accountant"}).status_code == 201
+def test_email_code_cannot_be_reused(make_client):
     c = make_client()
-    r1 = c.post("/api/auth/login", json={"username": "nhanvien.moi", "password": "MatKhau@Moi123"})
-    assert r1.json()["status"] == "TOTP_SETUP_REQUIRED"
-    setup = c.post("/api/auth/totp/setup")
-    assert setup.status_code == 200
-    assert setup.json()["otpauth_url"].startswith("otpauth://totp/")
-    assert setup.json()["qr_data_url"].startswith("data:image/png;base64,")
-    secret = setup.json()["otpauth_url"].split("secret=")[1].split("&")[0]
-    r = c.post("/api/auth/totp/confirm", json={"code": pyotp.TOTP(secret).now()})
-    assert r.status_code == 200 and r.json()["user"]["username"] == "nhanvien.moi"
+    c.post("/api/auth/login", json={"username": "quanly02", "password": DEV_PASSWORD})
+    code = _EMAIL_CODES["quanly02"]
+    assert c.post("/api/auth/mfa", json={"code": code}).status_code == 200
+    r = c.post("/api/auth/mfa", json={"code": code})
+    assert r.status_code == 401 and err(r) == "NOT_AUTHENTICATED"
+
+
+def test_email_code_resend_replaces_previous_code(make_client, monkeypatch):
+    codes = iter((123456, 654321))
+    monkeypatch.setattr(auth_router.secrets, "randbelow", lambda _: next(codes))
+    c = make_client()
+    c.post("/api/auth/login", json={"username": "quanly01", "password": DEV_PASSWORD})
+    old_code = _EMAIL_CODES["quanly01"]
+    r = c.post("/api/auth/mfa/resend")
+    assert r.status_code == 200
+    new_code = _EMAIL_CODES["quanly01"]
+    assert new_code != old_code
+    assert err(c.post("/api/auth/mfa", json={"code": old_code})) == "MFA_INVALID"
+    assert c.post("/api/auth/mfa", json={"code": new_code}).status_code == 200
+
+
+def test_email_delivery_failure_is_reported(make_client, monkeypatch):
+    def fail_delivery(*args):
+        raise EmailDeliveryError("SMTP unavailable")
+
+    monkeypatch.setattr(auth_router, "send_login_code", fail_delivery)
+    r = make_client().post("/api/auth/login", json={"username": "admin01", "password": DEV_PASSWORD})
+    assert r.status_code == 503 and err(r) == "MFA_DELIVERY_FAILED"
+
+
+def test_expired_email_code_is_rejected(make_client):
+    import json
+
+    c = make_client()
+    c.post("/api/auth/login", json={"username": "quanly01", "password": DEV_PASSWORD})
+    row = db.query_one("SELECT id, data_json FROM sessions ORDER BY created_at DESC LIMIT 1")
+    data = json.loads(row["data_json"])
+    data["pending"]["otp_expires_at"] = "2000-01-01T00:00:00.000Z"
+    db.execute("UPDATE sessions SET data_json = ? WHERE id = ?", (json.dumps(data), row["id"]))
+    r = c.post("/api/auth/mfa", json={"code": _EMAIL_CODES["quanly01"]})
+    assert r.status_code == 401 and err(r) == "MFA_INVALID"
 
 
 def test_logout_destroys_session_even_for_stolen_cookie(make_client):
@@ -87,7 +104,7 @@ def test_logout_destroys_session_even_for_stolen_cookie(make_client):
     thief = make_client()
     thief.cookies.set("connect.sid", stolen)
     r = thief.get("/api/auth/me")
-    assert r.status_code == 401 and err(r) == "NOT_AUTHENTICATED"  # phiên lưu server nên bị hủy thật
+    assert r.status_code == 401 and err(r) == "NOT_AUTHENTICATED"
 
 
 def test_session_cookie_flags(make_client):
@@ -98,17 +115,22 @@ def test_session_cookie_flags(make_client):
 
 
 def test_new_session_issued_after_login_steps(make_client):
-    """Chống session fixation: kẻ tấn công cài sẵn cookie, server vẫn phải cấp token MỚI sau khi đăng nhập."""
     c = make_client()
-    r = c.post("/api/auth/login", json={"username": "quanly01", "password": DEV_PASSWORD},
-               headers={"Cookie": "connect.sid=fixated-by-attacker"})
+    r = c.post(
+        "/api/auth/login",
+        json={"username": "quanly01", "password": DEV_PASSWORD},
+        headers={"Cookie": "connect.sid=fixated-by-attacker"},
+    )
     issued = r.headers["set-cookie"].split(";")[0].split("=", 1)[1]
     assert issued and issued != "fixated-by-attacker"
 
 
 def test_tc17_lock_after_five_wrong_passwords(login_as, make_client):
     admin = login_as("admin01")
-    admin.post("/api/users", json={"username": "nan.nhan", "password": "MatKhau@12345", "role": "manager"})
+    admin.post("/api/users", json={
+        "username": "nan.nhan", "password": "MatKhau@12345", "role": "manager",
+        "email": "nan.nhan@example.test",
+    })
     c = make_client()
     for _ in range(settings.max_login_attempts):
         r = c.post("/api/auth/login", json={"username": "nan.nhan", "password": "sai-mat-khau"})
@@ -129,18 +151,15 @@ def test_admin_is_never_account_locked(make_client):
 
     row = db.query_one("SELECT failed_attempts, locked_until FROM users WHERE username = 'admin01'")
     assert row["failed_attempts"] == 0 and row["locked_until"] is None
-    assert c.post("/api/auth/login", json={"username": "admin01", "password": DEV_PASSWORD}).json() == {
-        "status": "MFA_REQUIRED"
-    }
-
-    wrong_code = "000000" if totp() != "000000" else "000001"
+    c.post("/api/auth/login", json={"username": "admin01", "password": DEV_PASSWORD})
+    wrong_code = "000000" if _EMAIL_CODES["admin01"] != "000000" else "000001"
     for _ in range(settings.max_login_attempts + 1):
         r = c.post("/api/auth/mfa", json={"code": wrong_code})
         assert r.status_code == 401 and err(r) == "MFA_INVALID"
 
     row = db.query_one("SELECT failed_attempts, locked_until FROM users WHERE username = 'admin01'")
     assert row["failed_attempts"] == 0 and row["locked_until"] is None
-    assert c.post("/api/auth/mfa", json={"code": totp()}).status_code == 200
+    assert c.post("/api/auth/mfa", json={"code": _EMAIL_CODES["admin01"]}).status_code == 200
 
 
 def test_tc17_rate_limit_on_real_route(make_client, monkeypatch):
@@ -154,18 +173,28 @@ def test_tc17_rate_limit_on_real_route(make_client, monkeypatch):
 
 
 def test_tc16_non_admin_cannot_manage_users(login_as):
-    r = login_as("ketoan01").post("/api/users", json={"username": "ke.tan.cong", "password": "MatKhau@12345",
-                                                      "role": "admin"})
+    r = login_as("ketoan01").post(
+        "/api/users",
+        json={"username": "ke.tan.cong", "password": "MatKhau@12345", "role": "admin",
+              "email": "ke.tan.cong@example.test"},
+    )
     assert r.status_code == 403 and err(r) == "FORBIDDEN_ROLE"
 
 
 def test_admin_creates_user_duplicate_and_weak_password(login_as):
     admin = login_as("admin01")
-    ok = admin.post("/api/users", json={"username": "ketoan02", "password": "MatKhau@12345", "role": "accountant"})
+    payload = {"username": "ketoan02", "password": "MatKhau@12345", "role": "accountant",
+               "email": "ketoan02@example.test"}
+    ok = admin.post("/api/users", json=payload)
     assert ok.status_code == 201
-    dup = admin.post("/api/users", json={"username": "ketoan02", "password": "MatKhau@12345", "role": "accountant"})
+    dup = admin.post("/api/users", json=payload)
     assert dup.status_code == 409 and err(dup) == "USERNAME_TAKEN"
-    weak = admin.post("/api/users", json={"username": "ketoan03", "password": "123", "role": "accountant"})
+    duplicate_email = admin.post(
+        "/api/users",
+        json={**payload, "username": "ketoan03", "email": "KETOAN02@example.test"},
+    )
+    assert duplicate_email.status_code == 409 and err(duplicate_email) == "EMAIL_TAKEN"
+    weak = admin.post("/api/users", json={**payload, "username": "ketoan03", "password": "123"})
     assert weak.status_code == 400 and err(weak) == "VALIDATION_ERROR"
     users = admin.get("/api/users").json()["users"]
     assert all("password_hash" not in u for u in users)
