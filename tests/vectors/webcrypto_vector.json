@@ -1,0 +1,6 @@
+{
+ "spki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEZeGbZZ3g3oylRIzdt9ifr+xRG0iMWYjwTYGVu6W44WlJxwOjqAZueTr5C9RELPTbB1E91g99ldmsxsowVsEo3g==",
+ "s": "{\"action\":\"APPROVE\",\"amount\":200000000,\"approver_id\":3,\"currency\":\"VND\",\"device_id\":7,\"expires_at\":\"2026-10-02T08:35:00.000Z\",\"level\":1,\"nonce\":\"b3f1c2d4e5a60718293a4b5c6d7e8f90\",\"recipient_account\":\"0123456789\",\"recipient_name\":\"CÔNG TY TNHH Ánh Dương \\\"ABC\\\" & Đối tác\",\"tx_created_at\":\"2026-10-02T08:30:00.000Z\",\"tx_id\":15,\"v\":1}",
+ "sig": "dPHEo6aIPQjlAenm3BYVQAvRY4RQsNCFjQTxUqGqblmLzMps3IsBif+Kmft59uyjyUpd1LBtQYdfPp5izpf9jw==",
+ "siglen": 64
+}
