@@ -9,7 +9,7 @@ const state = {
   user: null,
   authStep: "login",
   pendingUsername: "",
-  setupData: null,
+  pendingEmailHint: "",
   view: "transactions",
   transactions: [],
   totalTransactions: 0,
@@ -265,7 +265,7 @@ async function perform(action, txId = null, audit = false) {
 function renderAuth() {
   setSession();
   const main = el("div");
-  main.append(heading("Đăng nhập TrustSign", "Xác thực gồm mật khẩu và mã TOTP; phiên được quản lý bằng cookie httpOnly.", "Không có giao dịch nào được ký ở bước này"));
+  main.append(heading("Đăng nhập TrustSign", "Xác thực gồm mật khẩu và mã OTP qua email; phiên được quản lý bằng cookie httpOnly.", "Không có giao dịch nào được ký ở bước này"));
   const card = el("section", { className: "card", attributes: { "aria-labelledby": "auth-title" } });
   appendFeedback(card);
   const form = el("form", { className: "form-grid" });
@@ -277,26 +277,17 @@ function renderAuth() {
       field("Mật khẩu", input("password", "password", { attributes: { autocomplete: "current-password" } })),
       el("div", { className: "field full" }, [el("button", { className: "button", text: "Tiếp tục", type: "submit" })]),
     );
-  } else if (state.authStep === "mfa") {
-    card.append(el("h2", { id: "auth-title", text: "Bước 2 · Xác thực TOTP" }));
-    card.append(el("p", { className: "help", text: `Tài khoản: ${state.pendingUsername}. Mã TOTP chỉ dùng một lần trong chu kỳ 30 giây.` }));
-    form.append(
-      field("Mã TOTP 6 số", input("code", "text", { attributes: { inputmode: "numeric", pattern: "[0-9]{6}", maxlength: 6, autocomplete: "one-time-code" } })),
-      el("div", { className: "field full" }, [el("button", { className: "button", text: "Xác thực", type: "submit" })]),
-    );
   } else {
-    card.append(el("h2", { id: "auth-title", text: state.authStep === "setup" ? "Thiết lập ứng dụng TOTP" : "Xác nhận mã TOTP" }));
-    if (state.authStep === "setup" && state.setupData) {
-      card.append(el("p", { className: "help", text: "Quét mã QR bằng ứng dụng xác thực. Nếu không quét được, dùng liên kết otpauth bên dưới." }));
-      card.append(el("img", { className: "qr-image", src: state.setupData.qr_data_url, alt: "Mã QR thiết lập TOTP" }));
-      const url = el("details", {}, [el("summary", { text: "Hiện liên kết otpauth" }), el("p", { className: "mono", text: state.setupData.otpauth_url })]);
-      card.append(url);
-      form.append(field("Mã xác nhận 6 số", input("code", "text", { attributes: { inputmode: "numeric", pattern: "[0-9]{6}", maxlength: 6, autocomplete: "one-time-code" } })));
-    } else {
-      card.append(el("p", { className: "help", text: "Nhập mã mới nhất vừa xuất hiện trong ứng dụng xác thực." }));
-      form.append(field("Mã TOTP 6 số", input("code", "text", { attributes: { inputmode: "numeric", pattern: "[0-9]{6}", maxlength: 6, autocomplete: "one-time-code" } })));
-    }
-    form.append(el("div", { className: "field full" }, [el("button", { className: "button", text: "Xác nhận và đăng nhập", type: "submit" })]));
+    // authStep === "mfa"
+    card.append(el("h2", { id: "auth-title", text: "Bước 2 · Xác thực Email OTP" }));
+    card.append(el("p", { className: "help", text: `Mã 6 số đã gửi tới ${state.pendingEmailHint || "email của bạn"}. Mã có hiệu lực 10 phút và chỉ dùng được một lần.` }));
+    form.append(
+      field("Mã OTP 6 số", input("code", "text", { attributes: { inputmode: "numeric", pattern: "[0-9]{6}", maxlength: 6, autocomplete: "one-time-code" } })),
+      el("div", { className: "field full toolbar" }, [
+        el("button", { className: "button", text: "Xác thực", type: "submit" }),
+        button("Gửi lại mã", "resend-mfa", "button secondary"),
+      ]),
+    );
   }
   form.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -305,20 +296,20 @@ function renderAuth() {
       if (state.authStep === "login") {
         const result = await api.login(data);
         state.pendingUsername = data.username;
+        state.pendingEmailHint = result.email_hint || "";
         state.error = null;
-        if (result.status === "TOTP_SETUP_REQUIRED") {
-          state.setupData = await api.totpSetup();
-          state.authStep = "setup";
-        } else if (result.status === "MFA_REQUIRED") {
+        if (result.status === "MFA_REQUIRED") {
           state.authStep = "mfa";
         } else {
           throw new Error(`Trạng thái đăng nhập không được hỗ trợ: ${result.status}`);
         }
         return;
       }
-      const result = state.authStep === "setup" ? await api.totpConfirm({ code: data.code }) : await api.mfa({ code: data.code });
+      // authStep === "mfa"
+      const result = await api.mfa({ code: data.code });
       state.user = result.user;
       state.authStep = "login";
+      state.pendingEmailHint = "";
       const current = await api.me();
       state.user = current;
       state.view = current.role === "admin" ? "audit" : "transactions";
@@ -1001,9 +992,17 @@ async function handleClick(event) {
       state.user = null;
       state.authStep = "login";
       state.pendingUsername = "";
-      state.setupData = null;
+      state.pendingEmailHint = "";
       state.preview = null;
       state.lastApproveRequest = null;
+    });
+    return;
+  }
+  if (action === "resend-mfa") {
+    await perform(async () => {
+      const result = await api.resendMfa();
+      state.pendingEmailHint = result.email_hint || state.pendingEmailHint;
+      state.notice = `Mã OTP mới đã được gửi tới ${state.pendingEmailHint || "email của bạn"}.`;
     });
     return;
   }
