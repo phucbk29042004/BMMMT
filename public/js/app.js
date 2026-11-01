@@ -112,6 +112,124 @@ const EVENT_OPTIONS = [
   "TX_FULLY_APPROVED", "TX_REJECTED", "TX_CANCELLED", "TX_EXPIRED", "APPROVAL_REJECTED_BY_SYSTEM",
 ];
 
+const AUDIT_EVENT_LABELS = {
+  LOGIN_SUCCESS: {
+    label: "Đăng nhập thành công (bước mật khẩu)",
+    description: "Thông tin mật khẩu hợp lệ; người dùng cần tiếp tục xác thực OTP qua email.",
+    level: "success",
+  },
+  LOGIN_FAILED: {
+    label: "Đăng nhập không thành công",
+    description: "Thông tin đăng nhập không được chấp nhận ở bước mật khẩu.",
+    level: "error",
+  },
+  MFA_SUCCESS: {
+    label: "Xác thực OTP qua email thành công",
+    description: "Mã OTP hợp lệ và quá trình đăng nhập đã hoàn tất.",
+    level: "success",
+  },
+  MFA_FAILED: {
+    label: "Xác thực OTP không thành công",
+    description: "Mã OTP nhập vào không được chấp nhận.",
+    level: "error",
+  },
+  ACCOUNT_LOCKED: {
+    label: "Tài khoản bị tạm khóa",
+    description: "Tài khoản bị khóa tạm thời sau nhiều lần xác thực không thành công.",
+    level: "warning",
+  },
+  USER_CREATED: {
+    label: "Đã tạo người dùng",
+    description: "Một tài khoản người dùng mới đã được tạo.",
+    level: "info",
+  },
+  DEVICE_REGISTERED: {
+    label: "Đã đăng ký thiết bị",
+    description: "Thiết bị mới đã được đăng ký để sử dụng trong hệ thống.",
+    level: "success",
+  },
+  DEVICE_REVOKED: {
+    label: "Đã thu hồi thiết bị",
+    description: "Thiết bị không còn được phép sử dụng trong hệ thống.",
+    level: "warning",
+  },
+  TX_CREATED: {
+    label: "Đã tạo giao dịch",
+    description: "Một yêu cầu giao dịch mới đã được ghi nhận.",
+    level: "info",
+  },
+  TX_APPROVED: {
+    label: "Giao dịch được duyệt một cấp",
+    description: "Một cấp phê duyệt đã hoàn tất; giao dịch có thể còn cấp duyệt tiếp theo.",
+    level: "success",
+  },
+  TX_FULLY_APPROVED: {
+    label: "Giao dịch được duyệt đầy đủ",
+    description: "Giao dịch đã hoàn tất tất cả các cấp phê duyệt cần thiết.",
+    level: "success",
+  },
+  TX_REJECTED: {
+    label: "Giao dịch bị từ chối",
+    description: "Người có thẩm quyền đã từ chối giao dịch.",
+    level: "warning",
+  },
+  TX_CANCELLED: {
+    label: "Giao dịch đã bị hủy",
+    description: "Yêu cầu giao dịch đã được người tạo hủy.",
+    level: "warning",
+  },
+  TX_EXPIRED: {
+    label: "Giao dịch hết hạn",
+    description: "Giao dịch đã quá thời hạn xử lý.",
+    level: "warning",
+  },
+  APPROVAL_REJECTED_BY_SYSTEM: {
+    label: "Yêu cầu duyệt bị hệ thống từ chối",
+    description: "Hệ thống không chấp nhận yêu cầu phê duyệt nên chưa ghi nhận chữ ký.",
+    level: "error",
+  },
+};
+
+const AUDIT_DATA_LABELS = {
+  tx_id: "Mã giao dịch",
+  amount: "Số tiền",
+  recipient_account: "Số tài khoản người nhận",
+  attempts: "Số lần xác thực không thành công",
+  locked_until: "Thời điểm tự mở khóa",
+  trigger: "Nguyên nhân khóa",
+  username: "Tên đăng nhập",
+  reason: "Lý do",
+  stage: "Giai đoạn",
+  user_id: "Mã người dùng",
+  role: "Vai trò",
+  seeded: "Tạo từ dữ liệu khởi tạo",
+  device_id: "Mã thiết bị",
+  label: "Tên thiết bị",
+  owner_id: "Mã chủ sở hữu",
+  level: "Cấp phê duyệt",
+  error_code: "Lý do hệ thống từ chối",
+};
+
+const AUDIT_DATA_VALUE_LABELS = {
+  stage: { EMAIL_MFA: "Xác thực OTP qua email" },
+  reason: {
+    unknown_user: "Không tìm thấy tài khoản",
+    locked: "Tài khoản đang bị khóa",
+  },
+  trigger: {
+    LOGIN_FAILED: "Đăng nhập không thành công",
+    MFA_FAILED: "Xác thực OTP không thành công",
+  },
+};
+
+const SEEDED_ACTOR_ROLES = {
+  1: "admin",
+  2: "accountant",
+  3: "manager",
+  4: "director",
+  5: "manager",
+};
+
 function el(tag, options = {}, children = []) {
   const node = document.createElement(tag);
   if (options.className) node.className = options.className;
@@ -551,7 +669,7 @@ function renderTransactions() {
     await loadTransactions();
   }));
   const actions = el("div", { className: "toolbar" }, [filterControl]);
-  if (state.user.role === "accountant") actions.append(button("＋ Tạo giao dịch", "new-transaction", "button success"));
+  if (state.user.role === "accountant") actions.append(button("Tạo giao dịch", "new-transaction", "button success"));
   panel.append(
     el("div", { className: "toolbar-spread" }, [
       el("div", {}, [el("h2", { text: "Danh sách giao dịch" }), el("p", { className: "help", text: `Tổng ${state.totalTransactions} giao dịch` })]),
@@ -566,6 +684,7 @@ function renderTransactions() {
     return panel;
   }
   const table = el("table");
+  table.className = "transaction-table";
   table.append(el("thead", {}, [el("tr", {}, [
     el("th", { text: "Mã / trạng thái" }), el("th", { text: "Số tiền" }), el("th", { text: "Người nhận" }),
     el("th", { text: "Tạo lúc" }), el("th", { text: "Thao tác" }),
@@ -588,15 +707,18 @@ function renderTransactions() {
       rowActions.append(button("Từ chối", `tx-reject:${tx.id}`, "button small danger"));
     }
     body.append(el("tr", {}, [
-      el("td", {}, [el("strong", { text: `#${tx.id}` }), el("br"), status]),
-      el("td", { text: formatAmount(tx.amount, tx.currency) }),
-      el("td", {}, [el("strong", { text: tx.recipient_name }), el("br"), el("span", { className: "mono", text: tx.recipient_account })]),
-      el("td", { text: new Date(tx.created_at).toLocaleString("vi-VN") }),
-      el("td", {}, [rowActions]),
+      el("td", { attributes: { "data-label": "Mã / trạng thái" } }, [el("strong", { text: `#${tx.id}` }), el("br"), status]),
+      el("td", { text: formatAmount(tx.amount, tx.currency), attributes: { "data-label": "Số tiền" } }),
+      el("td", { attributes: { "data-label": "Người nhận" } }, [el("strong", { text: tx.recipient_name }), el("br"), el("span", { className: "mono", text: tx.recipient_account })]),
+      el("td", { text: new Date(tx.created_at).toLocaleString("vi-VN"), attributes: { "data-label": "Tạo lúc" } }),
+      el("td", { attributes: { "data-label": "Thao tác" } }, [rowActions]),
     ]));
   }
   table.append(body);
-  panel.append(el("div", { className: "table-wrap" }, [table]));
+  panel.append(el("div", {
+    className: "table-wrap",
+    attributes: { role: "region", tabindex: "0", "aria-label": "Bảng giao dịch, có thể cuộn ngang để xem thêm cột" },
+  }, [table]));
   return panel;
 }
 
@@ -608,7 +730,7 @@ function renderCreateTransaction() {
         el("p", { className: "eyebrow", text: "Yêu cầu thanh toán" }),
         el("h2", { text: "Thông tin giao dịch" }),
       ]),
-      el("span", { className: "secure-badge", text: "●  Giao dịch bảo mật" }),
+      el("span", { className: "secure-badge", text: "Giao dịch bảo mật" }),
     ]),
   );
   const form = el("form", { className: "form-grid transaction-form" });
@@ -1007,11 +1129,122 @@ function renderDevices() {
   return grid;
 }
 
+function formatAuditDataValue(key, value) {
+  const knownValues = AUDIT_DATA_VALUE_LABELS[key];
+  if (knownValues && Object.hasOwn(knownValues, value)) return knownValues[value];
+  if (key === "role" && typeof value === "string") return roleName(value);
+  if (key === "seeded" && typeof value === "boolean") return value ? "Có" : "Không";
+  if (key === "amount" && Number.isFinite(Number(value))) return formatAmount(Number(value), "VND");
+  if (key === "locked_until" && typeof value === "string" && Number.isFinite(Date.parse(value))) {
+    return new Date(value).toLocaleString("vi-VN");
+  }
+  if (key === "error_code" && Object.hasOwn(ERROR_COPY, value)) return ERROR_COPY[value][0];
+  if (value === null) return "Không có";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function renderAuditData(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data) || Object.keys(data).length === 0) {
+    return el("p", { className: "help audit-data-empty", text: "Không có thông tin bổ sung" });
+  }
+
+  const list = el("dl", { className: "audit-data-list" });
+  for (const [key, value] of Object.entries(data)) {
+    const label = Object.hasOwn(AUDIT_DATA_LABELS, key) ? AUDIT_DATA_LABELS[key] : key;
+    list.append(el("div", {}, [
+      el("dt", { text: label }),
+      el("dd", { text: formatAuditDataValue(key, value) }),
+    ]));
+  }
+  return list;
+}
+
+function renderAuditEvent(event) {
+  const details = Object.hasOwn(AUDIT_EVENT_LABELS, event) ? AUDIT_EVENT_LABELS[event] : null;
+  const badge = el("span", {
+    className: `audit-event-badge audit-severity-${details?.level || "info"}`,
+    text: details?.label || "Sự kiện hệ thống",
+  });
+  const content = el("div", { className: "audit-event" }, [
+    badge,
+    el("p", { className: "audit-event-description", text: details?.description || "Sự kiện chưa có mô tả tiếng Việt." }),
+  ]);
+  if (!details) content.append(el("code", { className: "audit-event-unknown", text: String(event) }));
+  return content;
+}
+
+function renderAuditHashLine(label, value) {
+  const copyStatus = el("span", {
+    className: "audit-copy-status",
+    attributes: { "aria-live": "polite" },
+  });
+  const copyButton = el("button", {
+    className: "button small secondary audit-copy-button",
+    text: "Sao chép",
+    type: "button",
+    attributes: { "aria-label": `Sao chép mã ${label}` },
+  });
+  copyButton.addEventListener("click", async () => {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Trình duyệt không hỗ trợ sao chép.");
+      await navigator.clipboard.writeText(String(value));
+      copyStatus.textContent = `Đã sao chép mã ${label}.`;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Lỗi không xác định.";
+      copyStatus.textContent = `Không thể sao chép mã ${label}: ${reason} Hãy chọn và sao chép thủ công.`;
+    }
+  });
+  return el("div", { className: "audit-hash-line" }, [
+    el("strong", { text: label }),
+    el("code", { className: "hash audit-hash-value", text: String(value) }),
+    copyButton,
+    copyStatus,
+  ]);
+}
+
+function renderAuditTechnicalDetails(entry) {
+  return el("details", { className: "audit-technical" }, [
+    el("summary", { text: "Chi tiết kỹ thuật" }),
+    el("div", { className: "audit-technical-content" }, [
+      el("p", {}, [
+        el("strong", { text: "Mã sự kiện gốc: " }),
+        el("code", { text: String(entry.event) }),
+      ]),
+      el("p", { text: "Dữ liệu gốc:" }),
+      el("pre", { className: "mono audit-raw-data", text: JSON.stringify(entry.data ?? {}, null, 2) }),
+      renderAuditHashLine("prev_hash", entry.prev_hash),
+      renderAuditHashLine("hash", entry.hash),
+    ]),
+  ]);
+}
+
+function auditActorLabel(actorId) {
+  if (actorId === null || actorId === undefined) return "Không xác định";
+  const numericId = Number(actorId);
+  if (numericId === 0) return "Hệ thống";
+
+  const createdUser = state.auditEntries.find((entry) =>
+    entry.event === "USER_CREATED"
+    && Number(entry.data?.user_id) === numericId
+    && typeof entry.data?.role === "string"
+  );
+  const role = Number(state.user?.id) === numericId
+    ? state.user.role
+    : createdUser?.data.role || SEEDED_ACTOR_ROLES[numericId];
+  return role
+    ? `${roleName(role)} · #${numericId}`
+    : `Chưa xác định vai trò · #${actorId}`;
+}
+
 function renderAudit() {
   const card = el("section", { className: "card" });
   const eventControl = select("audit-event", [
     { value: "", label: "Tất cả sự kiện" },
-    ...EVENT_OPTIONS.map((event) => ({ value: event, label: event })),
+    ...EVENT_OPTIONS.map((event) => ({
+      value: event,
+      label: Object.hasOwn(AUDIT_EVENT_LABELS, event) ? AUDIT_EVENT_LABELS[event].label : event,
+    })),
   ], state.auditEvent);
   eventControl.className = "filter-control";
   eventControl.addEventListener("change", () => perform(async () => {
@@ -1038,27 +1271,32 @@ function renderAudit() {
   if (!state.auditEntries.length) card.append(empty("Chưa có sự kiện audit phù hợp."));
   else {
     const table = el("table");
+    table.className = "audit-table";
     table.append(el("thead", {}, [el("tr", {}, [
-      el("th", { text: "ID / Thời điểm" }), el("th", { text: "Sự kiện" }), el("th", { text: "Actor" }),
-      el("th", { text: "Data" }), el("th", { text: "prev_hash / hash" }),
+      el("th", { text: "ID / Thời điểm" }), el("th", { text: "Sự kiện" }), el("th", { text: "Người thực hiện" }),
+      el("th", { text: "Thông tin chi tiết" }), el("th", { text: "Mã kiểm chứng" }),
     ])]));
     const rows = el("tbody");
     const brokenAt = state.auditVerification?.broken_at;
     for (const entry of state.auditEntries) {
-      const data = el("pre", { className: "mono", text: JSON.stringify(entry.data, null, 2) });
+      const hashes = el("details", { className: "audit-hashes" }, [
+        el("summary", { text: "Xem mã kiểm chứng" }),
+        renderAuditHashLine("prev_hash", entry.prev_hash),
+        renderAuditHashLine("hash", entry.hash),
+      ]);
       rows.append(el("tr", { className: entry.id === brokenAt ? "broken-row" : "" }, [
-        el("td", {}, [el("strong", { text: `#${entry.id}` }), el("br"), el("span", { text: new Date(entry.created_at).toLocaleString("vi-VN") })]),
-        el("td", { text: entry.event }),
-        el("td", { text: entry.actor_id }),
-        el("td", {}, [data]),
-        el("td", {}, [
-          el("div", { className: "hash", text: `prev: ${entry.prev_hash}` }),
-          el("div", { className: "hash", text: `hash: ${entry.hash}` }),
-        ]),
+        el("td", { attributes: { "data-label": "ID / Thời điểm" } }, [el("strong", { text: `#${entry.id}` }), el("br"), el("span", { text: new Date(entry.created_at).toLocaleString("vi-VN") })]),
+        el("td", { attributes: { "data-label": "Sự kiện" } }, [renderAuditEvent(entry.event)]),
+        el("td", { text: auditActorLabel(entry.actor_id), attributes: { "data-label": "Người thực hiện" } }),
+        el("td", { attributes: { "data-label": "Thông tin chi tiết" } }, [renderAuditData(entry.data)]),
+        el("td", { attributes: { "data-label": "Mã kiểm chứng" } }, [hashes, renderAuditTechnicalDetails(entry)]),
       ]));
     }
     table.append(rows);
-    card.append(el("div", { className: "table-wrap" }, [table]));
+    card.append(el("div", {
+      className: "table-wrap",
+      attributes: { role: "region", tabindex: "0", "aria-label": "Nhật ký sự kiện, có thể cuộn ngang để xem thêm cột" },
+    }, [table]));
   }
   card.append(el("div", { className: "pagination" }, [
     button("← Mới hơn", "audit-newer", "button secondary small"),
