@@ -107,6 +107,16 @@ function button(label, action, className = "button") {
   return node;
 }
 
+function replaceAppContent(content) {
+  root.setAttribute("aria-busy", String(state.busy));
+  if (state.busy) {
+    content.querySelectorAll("button, input, select, textarea").forEach((control) => {
+      control.disabled = true;
+    });
+  }
+  root.replaceChildren(content);
+}
+
 function field(labelText, input, full = false) {
   return el("div", { className: `field${full ? " full" : ""}` }, [
     el("label", { text: labelText, attributes: { for: input.id } }),
@@ -170,9 +180,9 @@ function appendFeedback(parent) {
   else if (state.notice) parent.append(el("div", { className: "notice success", text: state.notice }));
 }
 
-function errorCard(error) {
+function errorCard(error, id = null) {
   const copy = ERROR_COPY[error.code] || ["Yêu cầu bị từ chối", error.message || "Máy chủ trả về lỗi chưa được ánh xạ.", "Đối chiếu mã lỗi với tài liệu API."];
-  const card = el("section", { className: "error-card", attributes: { role: "alert" } });
+  const card = el("section", { className: "error-card", attributes: { ...(id ? { id } : {}), role: "alert" } });
   card.append(
     el("h3", { text: copy[0] }),
     el("span", { className: "error-code", text: error.code || "UNKNOWN_ERROR" }),
@@ -264,27 +274,85 @@ async function perform(action, txId = null, audit = false) {
 
 function renderAuth() {
   setSession();
-  const main = el("div");
-  main.append(heading("Đăng nhập TrustSign", "Xác thực gồm mật khẩu và mã OTP qua email; phiên được quản lý bằng cookie httpOnly.", "Không có giao dịch nào được ký ở bước này"));
-  const card = el("section", { className: "card", attributes: { "aria-labelledby": "auth-title" } });
-  appendFeedback(card);
-  const form = el("form", { className: "form-grid" });
+  const main = el("div", { className: "auth-layout" });
+  const story = el("aside", { className: "auth-story", attributes: { "aria-label": "Thông tin về TrustSign" } }, [
+    el("div", { className: "auth-story-top" }, [
+      el("span", { className: "auth-story-mark", text: "TS", attributes: { "aria-hidden": "true" } }),
+      el("span", { text: "Giao dịch có thể kiểm chứng" }),
+    ]),
+    el("div", { className: "auth-story-copy" }, [
+      el("p", { className: "auth-story-title", text: "Mỗi chữ ký đều bắt đầu bằng sự tin cậy." }),
+      el("p", { text: "TrustSign giúp mỗi quyết định quan trọng được xác thực, minh bạch và có thể kiểm chứng." }),
+      el("ul", { className: "auth-principles" }, [
+        el("li", {}, [el("span", {}, [
+          el("strong", { text: "Xác thực hai bước" }),
+          el("span", { text: "Mật khẩu kết hợp mã OTP gửi qua email." }),
+        ])]),
+        el("li", {}, [el("span", {}, [
+          el("strong", { text: "Nội dung rõ ràng trước khi ký" }),
+          el("span", { text: "Kiểm tra thông tin giao dịch trước khi phê duyệt." }),
+        ])]),
+        el("li", {}, [el("span", {}, [
+          el("strong", { text: "Phiên được bảo vệ" }),
+          el("span", { text: "Phiên đăng nhập được quản lý bằng cookie httpOnly." }),
+        ])]),
+      ]),
+    ]),
+    el("div", { className: "auth-story-foot", text: "Bảo mật cho từng quyết định" }),
+  ]);
+  const panel = el("section", { className: "auth-panel" });
+  const authHeading = heading("Đăng nhập TrustSign", "Xác thực gồm mật khẩu và mã OTP qua email; phiên được quản lý bằng cookie httpOnly.", "Không có giao dịch nào được ký ở bước này");
+  authHeading.classList.add("auth-heading");
+  panel.append(authHeading);
+  const currentStep = state.authStep === "login" ? 1 : 2;
+  const progress = el("ol", { className: "auth-progress", attributes: { "aria-label": "Tiến trình đăng nhập" } });
+  for (const [step, label] of [[1, "Mật khẩu"], [2, "OTP qua email"]]) {
+    const item = el("li", {
+      text: label,
+      attributes: { "data-step": step, ...(step === currentStep ? { "aria-current": "step" } : {}) },
+    });
+    if (step < currentStep) item.classList.add("is-complete");
+    progress.append(item);
+  }
+  panel.append(progress);
+  const card = el("section", { className: "card auth-card", attributes: { "aria-labelledby": "auth-title" } });
+  const inlineError = state.error && (
+    state.authStep === "mfa"
+    || ["AUTH_INVALID_CREDENTIALS", "ACCOUNT_LOCKED", "RATE_LIMITED"].includes(state.error.code)
+  );
+  if (!inlineError || state.notice) appendFeedback(card);
+  const form = el("form", { className: "form-grid auth-form", attributes: { "aria-busy": state.busy } });
 
   if (state.authStep === "login") {
     card.append(el("h2", { id: "auth-title", text: "Bước 1 · Mật khẩu" }));
+    const usernameField = field("Tên đăng nhập", input("username", "text", { attributes: { autocomplete: "username" } }));
+    const passwordInput = input("password", "password", { attributes: { autocomplete: "current-password" } });
+    const passwordField = field("Mật khẩu", passwordInput);
+    if (inlineError) {
+      passwordInput.setAttribute("aria-invalid", "true");
+      passwordInput.setAttribute("aria-describedby", "form-error");
+      passwordField.append(errorCard(state.error, "form-error"));
+    }
     form.append(
-      field("Tên đăng nhập", input("username", "text", { attributes: { autocomplete: "username" } })),
-      field("Mật khẩu", input("password", "password", { attributes: { autocomplete: "current-password" } })),
-      el("div", { className: "field full" }, [el("button", { className: "button", text: "Tiếp tục", type: "submit" })]),
+      usernameField,
+      passwordField,
+      el("div", { className: "field full" }, [el("button", { className: "button", text: "Tiếp tục", type: "submit", disabled: state.busy })]),
     );
   } else {
     // authStep === "mfa"
     card.append(el("h2", { id: "auth-title", text: "Bước 2 · Xác thực Email OTP" }));
     card.append(el("p", { className: "help", text: `Mã 6 số đã gửi tới ${state.pendingEmailHint || "email của bạn"}. Mã có hiệu lực 10 phút và chỉ dùng được một lần.` }));
+    const codeInput = input("code", "text", { attributes: { inputmode: "numeric", pattern: "[0-9]{6}", maxlength: 6, autocomplete: "one-time-code" } });
+    const codeField = field("Mã OTP 6 số", codeInput);
+    if (inlineError) {
+      codeInput.setAttribute("aria-invalid", "true");
+      codeInput.setAttribute("aria-describedby", "form-error");
+      codeField.append(errorCard(state.error, "form-error"));
+    }
     form.append(
-      field("Mã OTP 6 số", input("code", "text", { attributes: { inputmode: "numeric", pattern: "[0-9]{6}", maxlength: 6, autocomplete: "one-time-code" } })),
+      codeField,
       el("div", { className: "field full toolbar" }, [
-        el("button", { className: "button", text: "Xác thực", type: "submit" }),
+        el("button", { className: "button", text: "Xác thực", type: "submit", disabled: state.busy }),
         button("Gửi lại mã", "resend-mfa", "button secondary"),
       ]),
     );
@@ -318,9 +386,10 @@ function renderAuth() {
     });
   });
   card.append(form);
-  main.append(card);
-  if (DEMO_MODE) main.append(renderLoginDemo());
-  root.replaceChildren(main);
+  panel.append(card);
+  if (DEMO_MODE) panel.append(renderLoginDemo());
+  main.append(story, panel);
+  replaceAppContent(main);
 }
 
 function renderLoginDemo() {
@@ -372,7 +441,7 @@ function render() {
   else if (state.view === "create") shell.append(renderCreateTransaction());
   else if (state.view === "demo" && DEMO_MODE) shell.append(renderDemoPanel());
   else shell.append(renderTransactions());
-  root.replaceChildren(shell);
+  replaceAppContent(shell);
 }
 
 async function loadTransactions() {
