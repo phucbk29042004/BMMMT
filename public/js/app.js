@@ -11,6 +11,8 @@ const state = {
   pendingUsername: "",
   pendingEmailHint: "",
   view: "transactions",
+  mobileNavOpen: false,
+  listScrollTop: {},
   showCreateLeaveConfirmation: false,
   createLeaveDestination: "",
   createTransactionDraft: null,
@@ -24,6 +26,7 @@ const state = {
   auditVerification: null,
   txFilter: "",
   detail: null,
+  detailOpen: false,
   preview: null,
   rejectTxId: null,
   error: null,
@@ -36,6 +39,7 @@ const state = {
   busy: false,
 };
 
+let detailReturnFocus = null;
 let companies = [];
 let companiesRequest = null;
 let companiesLoadState = "loading";
@@ -607,12 +611,17 @@ function navItems() {
 }
 
 function render() {
+  const previousList = root.querySelector(".table-wrap[data-scroll-key]");
+  if (previousList) state.listScrollTop[previousList.dataset.scrollKey] = previousList.scrollTop;
+  document.body.classList.toggle("is-authenticated", Boolean(state.user));
   if (!state.user) {
+    root.classList.remove("is-authenticated");
     renderAuth();
     return;
   }
+  root.classList.add("is-authenticated");
   setSession();
-  const shell = el("div");
+  const shell = el("div", { className: `app-shell${state.mobileNavOpen ? " is-nav-open" : ""}` });
   const title = state.view === "devices"
     ? ["Thiết bị tin cậy", "Khóa riêng được lưu trong IndexedDB của trình duyệt; máy chủ chỉ nhận khóa công khai.", "Quản lý thiết bị"]
     : state.view === "audit"
@@ -622,26 +631,81 @@ function render() {
         : state.view === "create"
           ? ["Tạo giao dịch", "Nhập nội dung yêu cầu thanh toán; người duyệt sẽ thấy trước khi ký.", "Dành cho kế toán"]
           : ["Giao dịch", "Danh sách và thao tác được hiển thị theo vai trò; backend vẫn là nơi quyết định quyền.", "Trung tâm phê duyệt"];
-  shell.append(heading(...title, state.view === "create" ? "nav:transactions" : null));
-  if (state.view === "create" && state.showCreateLeaveConfirmation) {
-    shell.append(renderCreateLeaveConfirmation());
-  }
-  appendFeedback(shell);
-
   const nav = el("nav", { className: "nav-list", attributes: { "aria-label": "Điều hướng chính" } });
+  const activeView = state.view === "create" ? "transactions" : state.view;
   for (const item of navItems()) {
-    const navButton = button(item.label, `nav:${item.id}`, "nav-button");
-    if (state.view === item.id) navButton.setAttribute("aria-current", "page");
+    const navButton = button("", `nav:${item.id}`, "nav-button");
+    navButton.append(
+      renderNavIcon(item.id),
+      el("span", { text: item.label }),
+    );
+    if (activeView === item.id) navButton.setAttribute("aria-current", "page");
     nav.append(navButton);
   }
-  shell.append(nav);
-
-  if (state.view === "devices") shell.append(renderDevices());
-  else if (state.view === "audit") shell.append(renderAudit());
-  else if (state.view === "create") shell.append(renderCreateTransaction());
-  else if (state.view === "demo" && DEMO_MODE) shell.append(renderDemoPanel());
-  else shell.append(renderTransactions());
+  const sidebar = el("aside", { className: "sidebar", attributes: { "aria-label": "Thanh điều hướng" } }, [
+    el("p", { className: "sidebar-label", text: "Không gian làm việc" }),
+    nav,
+  ]);
+  const workspace = el("section", { className: "workspace" });
+  const menuButton = button("Menu", "sidebar-toggle", "menu-toggle");
+  menuButton.setAttribute("aria-expanded", String(state.mobileNavOpen));
+  menuButton.setAttribute("aria-controls", "primary-navigation");
+  menuButton.prepend(renderNavIcon("menu"));
+  nav.id = "primary-navigation";
+  workspace.append(el("div", { className: "workspace-heading" }, [
+    menuButton,
+    heading(...title, state.view === "create" ? "nav:transactions" : null),
+  ]));
+  if (state.view === "create" && state.showCreateLeaveConfirmation) {
+    workspace.append(renderCreateLeaveConfirmation());
+  }
+  appendFeedback(workspace);
+  const viewContent = el("div", {
+    className: `view-content${["create", "demo"].includes(state.view) ? " is-scrollable" : ""}`,
+    attributes: { "data-view": state.view },
+  });
+  if (state.view === "devices") viewContent.append(renderDevices());
+  else if (state.view === "audit") viewContent.append(renderAudit());
+  else if (state.view === "create") viewContent.append(renderCreateTransaction());
+  else if (state.view === "demo" && DEMO_MODE) viewContent.append(renderDemoPanel());
+  else viewContent.append(renderTransactions());
+  workspace.append(viewContent);
+  shell.append(sidebar, workspace);
+  const sidebarBackdrop = button("Đóng menu", "sidebar-close", "sidebar-backdrop");
+  sidebarBackdrop.setAttribute("aria-label", "Đóng menu");
+  shell.append(sidebarBackdrop);
+  if (state.detailOpen && state.detail && state.view === "transactions") shell.append(renderDetail(state.detail));
   replaceAppContent(shell);
+  const currentList = root.querySelector(".table-wrap[data-scroll-key]");
+  if (currentList) currentList.scrollTop = state.listScrollTop[currentList.dataset.scrollKey] || 0;
+  if (state.detailOpen && state.detail && state.view === "transactions") activateDetailOverlay();
+}
+
+function renderNavIcon(id) {
+  const paths = {
+    transactions: ["M4 6h16M4 12h16M4 18h10", "M17 16l2 2 4-4"],
+    devices: ["M8 3h8a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z", "M10 17h4"],
+    audit: ["M12 8v4l3 2", "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"],
+    demo: ["M9 3h6", "M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3", "M8 15h8"],
+    menu: ["M4 6h16", "M4 12h16", "M4 18h16"],
+  };
+  const svgNamespace = "http://www.w3.org/2000/svg";
+  const icon = document.createElementNS(svgNamespace, "svg");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  icon.setAttribute("width", "20");
+  icon.setAttribute("height", "20");
+  icon.setAttribute("fill", "none");
+  icon.setAttribute("stroke", "currentColor");
+  icon.setAttribute("stroke-width", "1.7");
+  icon.setAttribute("stroke-linecap", "round");
+  icon.setAttribute("stroke-linejoin", "round");
+  icon.setAttribute("aria-hidden", "true");
+  for (const d of paths[id] || paths.transactions) {
+    const path = document.createElementNS(svgNamespace, "path");
+    path.setAttribute("d", d);
+    icon.append(path);
+  }
+  return icon;
 }
 
 async function loadTransactions() {
@@ -657,7 +721,7 @@ async function loadDevices() {
 }
 
 function renderTransactions() {
-  const panel = el("section", { className: "card" });
+  const panel = el("section", { className: "card list-panel", attributes: { "aria-label": "Danh sách giao dịch" } });
   const filters = [
     { value: "", label: "Tất cả trạng thái" },
     ...Object.entries(STATUS_LABEL).map(([value, label]) => ({ value, label })),
@@ -666,17 +730,17 @@ function renderTransactions() {
   filterControl.className = "filter-control";
   filterControl.addEventListener("change", () => perform(async () => {
     state.txFilter = filterControl.value;
+    state.listScrollTop.transactions = 0;
     await loadTransactions();
   }));
   const actions = el("div", { className: "toolbar" }, [filterControl]);
   if (state.user.role === "accountant") actions.append(button("Tạo giao dịch", "new-transaction", "button success"));
   panel.append(
-    el("div", { className: "toolbar-spread" }, [
+    el("div", { className: "list-panel-heading" }, [
       el("div", {}, [el("h2", { text: "Danh sách giao dịch" }), el("p", { className: "help", text: `Tổng ${state.totalTransactions} giao dịch` })]),
       actions,
     ]),
   );
-  if (state.detail) panel.append(renderDetail(state.detail));
   if (state.preview) panel.append(renderPreview(state.preview));
   if (state.rejectTxId !== null) panel.append(renderRejectForm(state.rejectTxId));
   if (!state.transactions.length) {
@@ -706,18 +770,25 @@ function renderTransactions() {
     if (["manager", "director"].includes(state.user.role) && ["PENDING_L1", "PENDING_L2"].includes(tx.status)) {
       rowActions.append(button("Từ chối", `tx-reject:${tx.id}`, "button small danger"));
     }
-    body.append(el("tr", {}, [
+    const row = el("tr", { attributes: { "data-tx-id": tx.id } }, [
       el("td", { attributes: { "data-label": "Mã / trạng thái" } }, [el("strong", { text: `#${tx.id}` }), el("br"), status]),
       el("td", { text: formatAmount(tx.amount, tx.currency), attributes: { "data-label": "Số tiền" } }),
       el("td", { attributes: { "data-label": "Người nhận" } }, [el("strong", { text: tx.recipient_name }), el("br"), el("span", { className: "mono", text: tx.recipient_account })]),
       el("td", { text: new Date(tx.created_at).toLocaleString("vi-VN"), attributes: { "data-label": "Tạo lúc" } }),
       el("td", { attributes: { "data-label": "Thao tác" } }, [rowActions]),
-    ]));
+    ]);
+    if (state.detailOpen && state.detail?.id === tx.id) row.classList.add("is-selected");
+    body.append(row);
   }
   table.append(body);
   panel.append(el("div", {
     className: "table-wrap",
-    attributes: { role: "region", tabindex: "0", "aria-label": "Bảng giao dịch, có thể cuộn ngang để xem thêm cột" },
+    attributes: {
+      role: "region",
+      tabindex: "0",
+      "aria-label": "Bảng giao dịch; phần danh sách có thể cuộn",
+      "data-scroll-key": "transactions",
+    },
   }, [table]));
   return panel;
 }
@@ -883,11 +954,25 @@ function renderCreateTransaction() {
 }
 
 function renderDetail(tx) {
-  const card = el("section", { className: "card", attributes: { "aria-label": `Chi tiết giao dịch ${tx.id}` } });
-  card.append(el("div", { className: "toolbar-spread" }, [
-    el("h3", { text: `Chi tiết giao dịch #${tx.id}` }),
-    button("Đóng", "detail-close", "button small secondary"),
+  const overlay = el("div", { className: "detail-overlay", attributes: { "data-detail-id": tx.id } });
+  const backdrop = button("", "detail-backdrop", "detail-backdrop");
+  backdrop.setAttribute("aria-label", "Đóng chi tiết giao dịch");
+  const panel = el("section", {
+    className: "detail-panel",
+    attributes: {
+      role: "dialog",
+      "aria-modal": "true",
+      "aria-labelledby": "detail-title",
+      tabindex: "-1",
+    },
+  });
+  const closeButton = button("Đóng", "detail-close", "button secondary");
+  closeButton.setAttribute("aria-label", "Đóng chi tiết giao dịch");
+  panel.append(el("header", { className: "detail-panel-header" }, [
+    el("h2", { id: "detail-title", text: `Chi tiết giao dịch #${tx.id}` }),
+    closeButton,
   ]));
+  const content = el("div", { className: "detail-panel-body" });
   const details = el("div", { className: "preview-grid" });
   details.append(
     valueCell("Trạng thái", STATUS_LABEL[tx.status] || tx.status),
@@ -898,15 +983,79 @@ function renderDetail(tx) {
     valueCell("Hạn giao dịch", new Date(tx.expires_at).toLocaleString("vi-VN")),
     valueCell("Ghi chú", tx.note ? `${tx.note} · không được ký` : "Không có"),
   );
-  card.append(details);
-  if (tx.reject_reason) card.append(el("div", { className: "notice warning", text: `Lý do từ chối: ${tx.reject_reason}` }));
+  content.append(details);
+  if (tx.reject_reason) content.append(el("div", { className: "notice warning", text: `Lý do từ chối: ${tx.reject_reason}` }));
   if (tx.approvals?.length) {
-    card.append(el("h3", { text: "Các cấp đã duyệt" }));
+    content.append(el("h3", { text: "Các cấp đã duyệt" }));
     for (const approval of tx.approvals) {
-      card.append(el("p", { text: `Cấp ${approval.level} · ${approval.approver.username} · thiết bị #${approval.device_id} · ${new Date(approval.created_at).toLocaleString("vi-VN")}` }));
+      content.append(el("p", { text: `Cấp ${approval.level} · ${approval.approver.username} · thiết bị #${approval.device_id} · ${new Date(approval.created_at).toLocaleString("vi-VN")}` }));
     }
   }
-  return card;
+  panel.append(content);
+  overlay.append(backdrop, panel);
+  return overlay;
+}
+
+function activateDetailOverlay() {
+  const overlay = root.querySelector(".detail-overlay");
+  const panel = overlay?.querySelector(".detail-panel");
+  if (!overlay || !panel) return;
+  for (const background of root.querySelectorAll(".sidebar, .workspace, .sidebar-backdrop")) {
+    background.inert = true;
+    background.setAttribute("aria-hidden", "true");
+  }
+  panel.querySelector('[data-action="detail-close"]')?.focus();
+  window.requestAnimationFrame(() => {
+    if (overlay.isConnected) overlay.classList.add("is-open");
+  });
+}
+
+function closeDetailOverlay() {
+  const overlay = root.querySelector(".detail-overlay");
+  state.detail = null;
+  state.detailOpen = false;
+  root.querySelectorAll(".transaction-table tr.is-selected").forEach((row) => row.classList.remove("is-selected"));
+  if (!overlay) return;
+  overlay.classList.remove("is-open");
+  overlay.classList.add("is-closing");
+  const returnTarget = detailReturnFocus;
+  detailReturnFocus = null;
+  const removeOverlay = () => {
+    overlay.remove();
+    for (const background of root.querySelectorAll(".sidebar, .workspace, .sidebar-backdrop")) {
+      background.inert = false;
+      background.removeAttribute("aria-hidden");
+    }
+    if (returnTarget?.isConnected) returnTarget.focus();
+  };
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) removeOverlay();
+  else window.setTimeout(removeOverlay, 220);
+}
+
+function handleDetailKeydown(event) {
+  const panel = root.querySelector(".detail-panel");
+  if (!panel) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeDetailOverlay();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusable = [...panel.querySelectorAll('button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])')];
+  if (!focusable.length) {
+    event.preventDefault();
+    panel.focus();
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 function renderRejectForm(txId) {
@@ -1081,8 +1230,8 @@ async function approvePreview() {
 }
 
 function renderDevices() {
-  const grid = el("div", { className: "grid" });
-  const card = el("section", { className: "card span-6" });
+  const grid = el("div", { className: "grid devices-layout" });
+  const card = el("section", { className: "card device-card" });
   card.append(
     el("h2", { text: "Đăng ký thiết bị hiện tại" }),
     el("p", { className: "help", text: "Tạo khóa ECDSA P-256 không xuất được; khóa riêng chỉ lưu trong IndexedDB và được gắn với tài khoản + device_id." }),
@@ -1110,10 +1259,11 @@ function renderDevices() {
     });
   });
   card.append(form);
-  grid.append(el("div", { className: "span-6" }, [card]));
-  const list = el("section", { className: "card span-6" });
+  grid.append(card);
+  const list = el("section", { className: "card device-card device-list-card" });
   list.append(el("h2", { text: "Thiết bị của tôi" }));
-  if (!state.devices.length) list.append(empty("Chưa có thiết bị đăng ký."));
+  const deviceItems = el("div", { className: "device-list-items" });
+  if (!state.devices.length) deviceItems.append(empty("Chưa có thiết bị đăng ký."));
   else {
     for (const device of state.devices) {
       const line = el("div", { className: "toolbar-spread" });
@@ -1121,11 +1271,12 @@ function renderDevices() {
       info.append(el("strong", { text: `${device.label} · #${device.id}` }), el("p", { className: "help", text: `${device.status === "active" ? "Đang hoạt động" : "Đã thu hồi"} · ${new Date(device.created_at).toLocaleString("vi-VN")}` }));
       line.append(info);
       if (device.status === "active") line.append(button("Thu hồi", `device-revoke:${device.id}`, "button danger small"));
-      list.append(line, el("hr"));
+      deviceItems.append(line, el("hr"));
     }
   }
+  list.append(deviceItems);
   list.append(el("p", { className: "help", text: "Xóa dữ liệu trình duyệt sẽ làm mất khóa riêng; thiết bị cần được đăng ký lại." }));
-  grid.append(el("div", { className: "span-6" }, [list]));
+  grid.append(list);
   return grid;
 }
 
@@ -1238,7 +1389,7 @@ function auditActorLabel(actorId) {
 }
 
 function renderAudit() {
-  const card = el("section", { className: "card" });
+  const card = el("section", { className: "card list-panel audit-list-panel" });
   const eventControl = select("audit-event", [
     { value: "", label: "Tất cả sự kiện" },
     ...EVENT_OPTIONS.map((event) => ({
@@ -1250,9 +1401,10 @@ function renderAudit() {
   eventControl.addEventListener("change", () => perform(async () => {
     state.auditEvent = eventControl.value;
     state.auditOffset = 0;
+    state.listScrollTop.audit = 0;
     await loadAudit();
   }));
-  card.append(el("div", { className: "toolbar-spread" }, [
+  card.append(el("div", { className: "list-panel-heading" }, [
     el("div", {}, [el("h2", { text: "Nhật ký sự kiện" }), el("p", { className: "help", text: `${state.auditTotal} dòng · mới nhất trước` })]),
     el("div", { className: "toolbar" }, [
       eventControl,
@@ -1295,7 +1447,12 @@ function renderAudit() {
     table.append(rows);
     card.append(el("div", {
       className: "table-wrap",
-      attributes: { role: "region", tabindex: "0", "aria-label": "Nhật ký sự kiện, có thể cuộn ngang để xem thêm cột" },
+      attributes: {
+        role: "region",
+        tabindex: "0",
+        "aria-label": "Nhật ký sự kiện; phần danh sách có thể cuộn",
+        "data-scroll-key": "audit",
+      },
     }, [table]));
   }
   card.append(el("div", { className: "pagination" }, [
@@ -1474,11 +1631,61 @@ async function verifyAudit() {
   state.notice = verification.valid ? `Hash chain hợp lệ · đã kiểm tra ${verification.checked} dòng.` : `Hash chain không hợp lệ · ${verification.reason} tại dòng #${verification.broken_at}.`;
 }
 
+async function openTransactionDetail(target, txId) {
+  detailReturnFocus = target;
+  state.busy = true;
+  target.disabled = true;
+  target.setAttribute("aria-busy", "true");
+  root.setAttribute("aria-busy", "true");
+  try {
+    state.detail = await api.transaction(txId);
+    state.detailOpen = true;
+    state.busy = false;
+    root.removeAttribute("aria-busy");
+    if (target.isConnected) {
+      target.disabled = false;
+      target.removeAttribute("aria-busy");
+    }
+    root.querySelectorAll(".transaction-table tr.is-selected").forEach((row) => row.classList.remove("is-selected"));
+    target.closest("tr")?.classList.add("is-selected");
+    const appShell = root.querySelector(".app-shell");
+    if (!appShell) throw new Error("Không tìm thấy vùng ứng dụng để hiển thị chi tiết giao dịch.");
+    appShell.append(renderDetail(state.detail));
+    activateDetailOverlay();
+  } catch (error) {
+    state.busy = false;
+    root.removeAttribute("aria-busy");
+    detailReturnFocus = null;
+    setError(error, txId);
+    render();
+  } finally {
+    state.busy = false;
+    root.removeAttribute("aria-busy");
+    if (target.isConnected) {
+      target.disabled = false;
+      target.removeAttribute("aria-busy");
+    }
+  }
+}
+
 async function handleClick(event) {
   const target = event.target.closest("[data-action]");
   if (!target || state.busy) return;
   const action = target.dataset.action;
+  if (action === "sidebar-toggle") {
+    state.mobileNavOpen = !state.mobileNavOpen;
+    root.querySelector(".app-shell")?.classList.toggle("is-nav-open", state.mobileNavOpen);
+    target.setAttribute("aria-expanded", String(state.mobileNavOpen));
+    return;
+  }
+  if (action === "sidebar-close") {
+    state.mobileNavOpen = false;
+    root.querySelector(".app-shell")?.classList.remove("is-nav-open");
+    root.querySelector('[data-action="sidebar-toggle"]')?.setAttribute("aria-expanded", "false");
+    return;
+  }
   if (action.startsWith("nav:")) {
+    state.mobileNavOpen = false;
     if (
       state.view === "create"
       && target.dataset.confirmLeave !== "true"
@@ -1502,6 +1709,8 @@ async function handleClick(event) {
     state.error = null;
     state.notice = null;
     state.detail = null;
+    state.detailOpen = false;
+    detailReturnFocus = null;
     state.preview = null;
     state.rejectTxId = null;
     await perform(async () => {
@@ -1543,6 +1752,7 @@ async function handleClick(event) {
     return;
   }
   if (action === "new-transaction") {
+    state.mobileNavOpen = false;
     state.showCreateLeaveConfirmation = false;
     state.createLeaveDestination = "";
     state.createTransactionDraft = null;
@@ -1557,7 +1767,7 @@ async function handleClick(event) {
     root.querySelector(".back-button")?.focus();
     return;
   }
-  if (action === "detail-close") { state.detail = null; render(); return; }
+  if (action === "detail-close" || action === "detail-backdrop") { closeDetailOverlay(); return; }
   if (action === "preview-close" || action === "reject-close") {
     state.preview = null;
     state.rejectTxId = null;
@@ -1566,7 +1776,7 @@ async function handleClick(event) {
   }
   if (action.startsWith("tx-detail:")) {
     const txId = Number(action.split(":")[1]);
-    await perform(async () => { state.detail = await api.transaction(txId); }, txId);
+    await openTransactionDetail(target, txId);
     return;
   }
   if (action.startsWith("tx-cancel:")) {
@@ -1696,6 +1906,7 @@ async function handleClick(event) {
 }
 
 root.addEventListener("click", (event) => { void handleClick(event); });
+root.addEventListener("keydown", handleDetailKeydown);
 sessionArea.addEventListener("click", (event) => { void handleClick(event); });
 
 async function initialize() {
