@@ -83,3 +83,4 @@ trustsign/
 | Kiểm thử chéo bằng vector sinh từ WebCrypto thật | Chứng minh server Python chấp nhận đúng chữ ký của trình duyệt |
 
 Giới hạn đã biết: xem cuối `docs/INTERFACE-TV1.md` và `docs/INTERFACE-TV2.md`.
+okok
