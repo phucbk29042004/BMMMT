@@ -33,6 +33,26 @@ const state = {
   busy: false,
 };
 
+let companies = [];
+async function loadCompanies() {
+  if (companies.length) return companies;
+  try {
+    const res = await fetch("/companies.json");
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        companies = data;
+      } else if (typeof data === "object" && data !== null) {
+        companies = Object.entries(data).map(([account, name]) => ({ account, name }));
+      }
+    }
+  } catch {
+    // Bo qua neu chua tai duoc file companies.json
+  }
+  return companies;
+}
+void loadCompanies();
+
 const ERROR_COPY = {
   NOT_AUTHENTICATED: ["Phiên đăng nhập chưa hợp lệ", "Hãy đăng nhập và hoàn tất xác thực TOTP rồi thử lại.", "Đăng nhập lại."],
   AUTH_INVALID_CREDENTIALS: ["Thông tin đăng nhập không đúng", "Tên đăng nhập hoặc mật khẩu chưa chính xác.", "Kiểm tra thông tin rồi thử lại."],
@@ -524,8 +544,38 @@ function renderCreateTransaction() {
   const form = el("form", { className: "form-grid" });
   const amount = input("amount", "number", { attributes: { min: 1, max: 10000000000, step: 1, inputmode: "numeric" } });
   amount.required = true;
-  const account = input("recipient_account", "text", { attributes: { minlength: 6, maxlength: 20, pattern: "[0-9]{6,20}" } });
+  const account = input("recipient_account", "text", {
+    attributes: {
+      minlength: 6,
+      maxlength: 20,
+      pattern: "[0-9]{6,20}",
+      list: "company-account-list",
+      autocomplete: "off",
+    },
+  });
   const name = input("recipient_name", "text", { attributes: { minlength: 2, maxlength: 100 } });
+
+  const datalist = el("datalist", { id: "company-account-list" });
+  const updateDatalist = () => {
+    datalist.replaceChildren(
+      ...companies.map((c) => el("option", { value: c.account, text: c.name, attributes: { label: c.name } }))
+    );
+  };
+  updateDatalist();
+  if (!companies.length) {
+    loadCompanies().then(updateDatalist);
+  }
+
+  const syncRecipientName = () => {
+    const val = account.value.trim();
+    const matched = companies.find((c) => String(c.account).trim() === val);
+    if (matched) {
+      name.value = matched.name;
+    }
+  };
+  account.addEventListener("input", syncRecipientName);
+  account.addEventListener("change", syncRecipientName);
+
   const note = el("textarea", { name: "note", id: "note", attributes: { maxlength: 200 } });
   form.append(
     field("Số tiền (VND, số nguyên)", amount),
@@ -553,7 +603,7 @@ function renderCreateTransaction() {
       state.notice = `Đã tạo giao dịch #${created.id} · ${STATUS_LABEL[created.status] || created.status}.`;
     });
   });
-  card.append(form);
+  card.append(datalist, form);
   return card;
 }
 
