@@ -82,6 +82,7 @@ def _issue_email_code(sess: session_mod.Session, user: Dict[str, Any]) -> None:
     sess.data["pending"]["otp_hash"] = _otp_digest(sess.sid, code)
     sess.data["pending"]["otp_expires_at"] = in_minutes(settings.otp_ttl_minutes)
     sess.save()
+    print(f"\n>>> [DEV OTP] Mã xác thực đăng nhập của {user['username']}: {code} <<<\n")
     try:
         send_login_code(user["email"], user["username"], code)
     except EmailDeliveryError as exc:

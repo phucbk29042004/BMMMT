@@ -11,6 +11,9 @@ const state = {
   pendingUsername: "",
   pendingEmailHint: "",
   view: "transactions",
+  showCreateLeaveConfirmation: false,
+  createLeaveDestination: "",
+  createTransactionDraft: null,
   transactions: [],
   totalTransactions: 0,
   devices: [],
@@ -34,22 +37,37 @@ const state = {
 };
 
 let companies = [];
-async function loadCompanies() {
+let companiesRequest = null;
+let companiesLoadState = "loading";
+let companiesLoadError = "";
+async function loadCompanies(retry = false) {
   if (companies.length) return companies;
-  try {
-    const res = await fetch("/companies.json");
-    if (res.ok) {
+  if (companiesRequest) return companiesRequest;
+  if (companiesLoadState === "error" && !retry) return [];
+  companiesLoadState = "loading";
+  companiesRequest = (async () => {
+    try {
+      const res = await fetch("/data/companies.json");
+      if (!res.ok) throw new Error(`Tệp danh sách công ty trả về HTTP ${res.status}.`);
       const data = await res.json();
-      if (Array.isArray(data)) {
-        companies = data;
-      } else if (typeof data === "object" && data !== null) {
-        companies = Object.entries(data).map(([account, name]) => ({ account, name }));
+      if (!Array.isArray(data) || data.some((company) =>
+        !company || typeof company.account !== "string" || typeof company.name !== "string"
+      )) {
+        throw new Error("Tệp danh sách công ty có định dạng không hợp lệ.");
       }
+      companies = data;
+      companiesLoadState = "loaded";
+      companiesLoadError = "";
+      return companies;
+    } catch (error) {
+      companiesLoadState = "error";
+      companiesLoadError = error instanceof Error ? error.message : "Không xác định được nguyên nhân.";
+      return [];
+    } finally {
+      companiesRequest = null;
     }
-  } catch {
-    // Bo qua neu chua tai duoc file companies.json
-  }
-  return companies;
+  })();
+  return companiesRequest;
 }
 void loadCompanies();
 
@@ -166,13 +184,50 @@ function select(name, items, selected = "") {
   return control;
 }
 
-function heading(title, subtitle, eyebrow = "TrustSign") {
+function backButton(action) {
+  const control = button("Trở về", action, "back-button");
+  control.setAttribute("aria-label", "Trở về");
+  control.prepend(el("span", { className: "back-arrow", attributes: { "aria-hidden": "true" } }));
+  return control;
+}
+
+function heading(title, subtitle, eyebrow = "TrustSign", backAction = null) {
+  const content = el("div");
+  if (backAction) content.append(backButton(backAction));
+  content.append(
+    el("p", { className: "eyebrow", text: eyebrow }),
+    el("h1", { text: title }),
+    el("p", { text: subtitle }),
+  );
   return el("div", { className: "page-heading" }, [
+    content,
+  ]);
+}
+
+function createTransactionHasChanges() {
+  const form = root.querySelector(".transaction-form");
+  if (!form) return false;
+  return Array.from(form.querySelectorAll("input, select, textarea"))
+    .some((control) => control.value.trim() !== "");
+}
+
+function renderCreateLeaveConfirmation() {
+  const stayButton = button("Ở lại", "stay-create", "button secondary");
+  const leaveButton = button("Rời đi", state.createLeaveDestination || "nav:transactions", "button danger");
+  leaveButton.dataset.confirmLeave = "true";
+  return el("section", {
+    className: "leave-confirmation",
+    attributes: {
+      role: "alertdialog",
+      "aria-labelledby": "leave-create-title",
+      "aria-describedby": "leave-create-description",
+    },
+  }, [
     el("div", {}, [
-      el("p", { className: "eyebrow", text: eyebrow }),
-      el("h1", { text: title }),
-      el("p", { text: subtitle }),
+      el("h2", { id: "leave-create-title", text: "Rời trang tạo giao dịch?" }),
+      el("p", { id: "leave-create-description", text: "Thông tin bạn đã nhập sẽ không được lưu." }),
     ]),
+    el("div", { className: "toolbar" }, [stayButton, leaveButton]),
   ]);
 }
 
@@ -265,8 +320,12 @@ function roleName(role) {
 function setSession() {
   sessionArea.replaceChildren();
   if (!state.user) return;
+  const username = state.user.username;
   sessionArea.append(
-    el("span", { text: `${state.user.username} · ${roleName(state.user.role)}` }),
+    el("span", { className: "session-identity" }, [
+      el("span", { className: "user-avatar", text: username.slice(0, 1).toUpperCase(), attributes: { "aria-hidden": "true" } }),
+      el("span", { text: `${username} · ${roleName(state.user.role)}` }),
+    ]),
     button("Đăng xuất", "logout", "icon-button"),
   );
 }
@@ -445,7 +504,10 @@ function render() {
         : state.view === "create"
           ? ["Tạo giao dịch", "Nhập nội dung yêu cầu thanh toán; người duyệt sẽ thấy trước khi ký.", "Dành cho kế toán"]
           : ["Giao dịch", "Danh sách và thao tác được hiển thị theo vai trò; backend vẫn là nơi quyết định quyền.", "Trung tâm phê duyệt"];
-  shell.append(heading(...title));
+  shell.append(heading(...title, state.view === "create" ? "nav:transactions" : null));
+  if (state.view === "create" && state.showCreateLeaveConfirmation) {
+    shell.append(renderCreateLeaveConfirmation());
+  }
   appendFeedback(shell);
 
   const nav = el("nav", { className: "nav-list", attributes: { "aria-label": "Điều hướng chính" } });
@@ -540,48 +602,137 @@ function renderTransactions() {
 
 function renderCreateTransaction() {
   const card = el("section", { className: "card" });
-  card.append(el("h2", { text: "Thông tin giao dịch" }));
-  const form = el("form", { className: "form-grid" });
-  const amount = input("amount", "number", { attributes: { min: 1, max: 10000000000, step: 1, inputmode: "numeric" } });
+  card.append(
+    el("div", { className: "transaction-card-heading" }, [
+      el("div", {}, [
+        el("p", { className: "eyebrow", text: "Yêu cầu thanh toán" }),
+        el("h2", { text: "Thông tin giao dịch" }),
+      ]),
+      el("span", { className: "secure-badge", text: "●  Giao dịch bảo mật" }),
+    ]),
+  );
+  const form = el("form", { className: "form-grid transaction-form" });
+  const amount = input("amount", "text", { attributes: { inputmode: "numeric", autocomplete: "off" } });
   amount.required = true;
-  const account = input("recipient_account", "text", {
-    attributes: {
-      minlength: 6,
-      maxlength: 20,
-      pattern: "[0-9]{6,20}",
-      list: "company-account-list",
-      autocomplete: "off",
-    },
-  });
-  const name = input("recipient_name", "text", { attributes: { minlength: 2, maxlength: 100 } });
-
-  const datalist = el("datalist", { id: "company-account-list" });
-  const updateDatalist = () => {
-    datalist.replaceChildren(
-      ...companies.map((c) => el("option", { value: c.account, text: c.name, attributes: { label: c.name } }))
+  const formatAmountInput = (value) => String(value || "")
+    .replace(/\D/g, "")
+    .replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  amount.value = formatAmountInput(state.createTransactionDraft?.amount);
+  const amountControl = el("div", { className: "amount-control" }, [
+    amount,
+    el("span", { className: "amount-suffix", text: "VND", attributes: { "aria-hidden": "true" } }),
+  ]);
+  const validateAmount = () => {
+    const digits = amount.value.replace(/\D/g, "");
+    const value = Number(digits);
+    amount.setCustomValidity(
+      digits && (!Number.isSafeInteger(value) || value < 1 || value > 10000000000)
+        ? "Số tiền phải từ 1 đến 10.000.000.000 VND."
+        : "",
     );
   };
-  updateDatalist();
-  if (!companies.length) {
-    loadCompanies().then(updateDatalist);
-  }
+  amount.addEventListener("input", () => {
+    const selectionStart = amount.selectionStart ?? amount.value.length;
+    const digitsBeforeCursor = amount.value.slice(0, selectionStart).replace(/\D/g, "").length;
+    amount.value = formatAmountInput(amount.value);
+    let caretPosition = 0;
+    let digitsSeen = 0;
+    while (caretPosition < amount.value.length && digitsSeen < digitsBeforeCursor) {
+      if (/\d/.test(amount.value[caretPosition])) digitsSeen += 1;
+      caretPosition += 1;
+    }
+    amount.setSelectionRange(caretPosition, caretPosition);
+    validateAmount();
+  });
+  validateAmount();
 
-  const syncRecipientName = () => {
-    const val = account.value.trim();
-    const matched = companies.find((c) => String(c.account).trim() === val);
-    if (matched) {
-      name.value = matched.name;
+  const account = select("recipient_account", [], "");
+  account.className = "company-select";
+  account.required = true;
+  account.value = state.createTransactionDraft?.recipient_account || "";
+  account.setAttribute("aria-describedby", "company-account-status");
+  const name = input("recipient_name", "text", {
+    required: true,
+    placeholder: "Tự động hiển thị sau khi chọn số tài khoản",
+    attributes: { minlength: 2, maxlength: 100 },
+  });
+  name.value = state.createTransactionDraft?.recipient_name || "";
+  name.readOnly = Boolean(state.createTransactionDraft?.recipient_account);
+  const companyStatus = el("div", {
+    id: "company-account-status",
+    className: "field-status",
+    attributes: { "aria-live": "polite" },
+  });
+
+  const refreshCompanySelect = () => {
+    if (!account.isConnected) return;
+    const selectedAccount = account.value || state.createTransactionDraft?.recipient_account || "";
+    account.replaceChildren(
+      el("option", { value: "", text: "Chọn số tài khoản", attributes: { disabled: "", selected: "" } }),
+      ...companies.map((company) => el("option", {
+        value: company.account,
+        text: company.account,
+      })),
+    );
+    if (companies.some((company) => company.account === selectedAccount)) {
+      account.value = selectedAccount;
+    }
+    account.disabled = companiesLoadState !== "loaded";
+    companyStatus.replaceChildren();
+    if (companiesLoadState === "loading") {
+      companyStatus.append(el("span", { className: "help", text: "Đang tải danh sách số tài khoản…" }));
+    } else if (companiesLoadState === "error") {
+      companyStatus.classList.add("is-error");
+      companyStatus.append(
+        el("p", { className: "help", text: `Không thể tải danh sách số tài khoản: ${companiesLoadError}` }),
+        button("Thử tải lại", "retry-companies", "button small secondary"),
+      );
+    } else {
+      companyStatus.classList.remove("is-error");
     }
   };
-  account.addEventListener("input", syncRecipientName);
-  account.addEventListener("change", syncRecipientName);
+  let dispatchingSelectionEvents = false;
+  const updateRecipientName = () => {
+    if (dispatchingSelectionEvents) return;
+    const matched = companies.find((company) => company.account === account.value);
+    name.value = matched ? matched.name : "";
+    name.readOnly = Boolean(matched);
+    dispatchingSelectionEvents = true;
+    try {
+      for (const control of [account, name]) {
+        control.dispatchEvent(new Event("input", { bubbles: true }));
+        control.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    } finally {
+      dispatchingSelectionEvents = false;
+    }
+  };
+  account.addEventListener("change", updateRecipientName);
+  void loadCompanies().then(refreshCompanySelect);
 
   const note = el("textarea", { name: "note", id: "note", attributes: { maxlength: 200 } });
+  note.value = state.createTransactionDraft?.note || "";
   form.append(
-    field("Số tiền (VND, số nguyên)", amount),
-    field("Số tài khoản người nhận", account),
-    field("Tên người nhận", name),
-    field("Ghi chú (không được ký)", note, true),
+    el("div", { className: "field" }, [
+      el("label", { text: "Số tiền (VND, số nguyên)", attributes: { for: amount.id } }),
+      amountControl,
+    ]),
+    el("div", { className: "field" }, [
+      el("label", { text: "Số tài khoản người nhận", attributes: { for: account.id } }),
+      account,
+      companyStatus,
+    ]),
+    el("div", { className: "field full recipient-name-field" }, [
+      el("label", { text: "Tên người nhận", attributes: { for: name.id } }),
+      name,
+    ]),
+    el("div", { className: "field full" }, [
+      el("div", { className: "field-label-row" }, [
+        el("label", { text: "Ghi chú", attributes: { for: note.id } }),
+        el("span", { className: "note-badge", text: "(không được ký)" }),
+      ]),
+      note,
+    ]),
     el("div", { className: "field full toolbar" }, [
       el("button", { className: "button success", text: "Tạo giao dịch", type: "submit" }),
       button("Quay lại danh sách", "nav:transactions", "button secondary"),
@@ -590,20 +741,22 @@ function renderCreateTransaction() {
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     const raw = Object.fromEntries(new FormData(form).entries());
+    state.createTransactionDraft = raw;
     perform(async () => {
       const created = await api.createTransaction({
-        amount: Number(raw.amount),
+        amount: Number(String(raw.amount).replace(/\D/g, "")),
         recipient_account: raw.recipient_account,
         recipient_name: raw.recipient_name,
         ...(raw.note ? { note: raw.note } : {}),
       });
+      state.createTransactionDraft = null;
       state.view = "transactions";
       state.txFilter = "";
       await loadTransactions();
       state.notice = `Đã tạo giao dịch #${created.id} · ${STATUS_LABEL[created.status] || created.status}.`;
     });
   });
-  card.append(datalist, form);
+  card.append(form);
   return card;
 }
 
@@ -1088,6 +1241,25 @@ async function handleClick(event) {
   if (!target || state.busy) return;
   const action = target.dataset.action;
   if (action.startsWith("nav:")) {
+    if (
+      state.view === "create"
+      && target.dataset.confirmLeave !== "true"
+      && createTransactionHasChanges()
+    ) {
+      state.createTransactionDraft = Object.fromEntries(
+        new FormData(root.querySelector(".transaction-form")).entries(),
+      );
+      state.createLeaveDestination = action;
+      state.showCreateLeaveConfirmation = true;
+      render();
+      root.querySelector('[data-action="stay-create"]')?.focus();
+      return;
+    }
+    state.showCreateLeaveConfirmation = false;
+    state.createLeaveDestination = "";
+    if (state.view === "create") {
+      state.createTransactionDraft = null;
+    }
     state.view = action.slice(4);
     state.error = null;
     state.notice = null;
@@ -1117,6 +1289,13 @@ async function handleClick(event) {
     });
     return;
   }
+  if (action === "retry-companies") {
+    const request = loadCompanies(true);
+    render();
+    await request;
+    render();
+    return;
+  }
   if (action === "resend-mfa") {
     await perform(async () => {
       const result = await api.resendMfa();
@@ -1126,8 +1305,18 @@ async function handleClick(event) {
     return;
   }
   if (action === "new-transaction") {
+    state.showCreateLeaveConfirmation = false;
+    state.createLeaveDestination = "";
+    state.createTransactionDraft = null;
     state.view = "create";
     render();
+    return;
+  }
+  if (action === "stay-create") {
+    state.showCreateLeaveConfirmation = false;
+    state.createLeaveDestination = "";
+    render();
+    root.querySelector(".back-button")?.focus();
     return;
   }
   if (action === "detail-close") { state.detail = null; render(); return; }
